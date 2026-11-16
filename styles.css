@@ -933,6 +933,32 @@ input[type="range"]::-moz-range-thumb {
     flex: 1 1 130px;
 }
 
+.remote-live {
+    padding: 12px;
+    margin-bottom: 12px;
+    background: var(--bg);
+    border-radius: 5px;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.remote-live small {
+    color: #b0b0b0;
+}
+
+.remote-seek-actions input {
+    flex: 1 1 100px;
+    min-width: 0;
+    width: 100px;
+    font: inherit;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 10px;
+}
+
 .remote-status {
     font-size: 0.85rem;
     line-height: 1.5;

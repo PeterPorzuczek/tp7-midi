@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TP-7 MIDI</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20261116-2">
 </head>
 <body>
     <div class="container">
@@ -106,14 +106,26 @@
                 </div>
                 <p id="remote-status" class="remote-status" role="status" aria-live="polite">Connect TP-7 first.</p>
                 <p id="remote-device" class="remote-help">Device information has not been read.</p>
+                <div class="remote-live">
+                    <p id="remote-file">Waiting for the current file…</p>
+                    <p id="remote-file-info"></p>
+                    <p><span id="remote-playback">Unknown</span> · <span id="remote-position">—</span></p>
+                    <small>Live device reports · experimental decoding · cue count unavailable</small>
+                </div>
                 <div class="remote-actions">
-                    <button id="remote-play" disabled>Native Play</button>
+                    <button id="remote-play" disabled>Resume playback</button>
                     <button id="remote-stop" disabled>Native Stop</button>
                 </div>
-                <p class="remote-help">Native Play/Stop use the companion protocol, separately from the rocker. Play first disables recording arm and cue recording. These commands have been reported working over USB; Bluetooth behavior needs a device test.</p>
+                <p class="remote-help">Resume continues from the current position. It does not perform the physical Play button's jump to a selected cue. Resume first disables recording arm and cue recording.</p>
+                <label for="remote-seek-time">Jump to time (seconds)</label>
+                <div class="remote-actions remote-seek-actions">
+                    <input id="remote-seek-time" type="text" inputmode="decimal" placeholder="10.000" autocomplete="off" aria-describedby="remote-seek-help">
+                    <button id="remote-seek" disabled>Jump &amp; play</button>
+                </div>
+                <p id="remote-seek-help" class="remote-help">Experimental: stops, sets the time, then resumes playback using the companion protocol. Enter seconds with up to 3 decimal places. Automatic reading of saved cue positions is not available yet.</p>
                 <details>
                     <summary>Device replies and cue investigation</summary>
-                    <p class="remote-help">Read TP-7 checks the manufacturer's settings API. Start remote session listens for companion events. While connected, select cues with +/− on TP-7 and press Play, then copy the report. Unknown replies are kept as raw data; they are not interpreted as a cue list.</p>
+                    <p class="remote-help">Start remote session receives file and playback events. To capture cue jumps, select a cue with +/− on TP-7, then press the physical Play button on TP-7. Repeat for another cue and copy the report. Resume in this app does not trigger that jump. File names are not interpreted as cue counts or BPM.</p>
                     <pre id="remote-report" tabindex="0">No device replies yet.</pre>
                     <button id="remote-copy">Copy report</button>
                     <textarea id="remote-copy-text" readonly hidden aria-label="Device report for manual copying"></textarea>
@@ -351,8 +363,8 @@
 
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
-    <script src="remote-protocol.js"></script>
+    <script src="remote-protocol.js?v=20261116-2"></script>
     <script src="app.js"></script>
-    <script src="remote-panel.js"></script>
+    <script src="remote-panel.js?v=20261116-2"></script>
 </body>
 </html>

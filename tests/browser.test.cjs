@@ -14,7 +14,8 @@ before(async () => {
     const root = path.join(__dirname, '..');
     const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js']);
     server = http.createServer(async (request, response) => {
-        const name = request.url === '/' ? '/index.html' : request.url;
+        const pathname = new URL(request.url, 'http://localhost').pathname;
+        const name = pathname === '/' ? '/index.html' : pathname;
         if (!allowed.has(name)) { response.writeHead(404).end(); return; }
         try {
             const content = await fs.readFile(path.join(root, name));
@@ -96,12 +97,31 @@ async function openApp(t, mode = 'usb') {
                                     data = [0, page, ...(page ? [] : new TextEncoder().encode(JSON.stringify({settings:[{id:7,name:'MIDI mode',value:'cue'}]}))), 0];
                                 }
                             }
+                            if (request.command === 127) {
+                                if (request.data[0] === 64) data = [66, 1];
+                                if (request.data[0] === 80) data = [78, 1];
+                                if (request.data[0] === 81) data = [78, 0];
+                                if (request.data[0] === 76) {
+                                    if (window.remoteMode === 'reject-seek') status = 3;
+                                    else data = [77, ...request.data.slice(1)];
+                                }
+                            }
                             const reply = TP7RemoteProtocol.encode(request.id, request.command, data);
                             reply[6] &= ~0x40;
                             reply.splice(9, 0, status);
                             for (const fragment of TP7RemoteProtocol.blePackets(reply, 247)) {
                                 characteristic.value = new DataView(fragment.buffer);
                                 for (const fn of notificationListeners) fn({target:characteristic});
+                            }
+                            if (request.command === 127 && request.data[0] === 64) {
+                                window.emitCompanion([75, 128, 187, 0, 0, 0, 62, 73, 0, 5, 26, 11, 16, 22, 35, 0,
+                                    ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.wav\0')]);
+                                window.emitCompanion([77, 227, 134, 0, 0]);
+                            }
+                            if (request.command === 127 && request.data[0] === 81 && window.changeFileOnStop) {
+                                window.changeFileOnStop = false;
+                                window.emitCompanion([75, 128, 187, 0, 0, 0, 62, 73, 0, 5, 26, 11, 16, 22, 35, 0,
+                                    ...new TextEncoder().encode('recordings\0other.wav\0')]);
                             }
                         });
                         decoder.push(packet);
@@ -114,6 +134,11 @@ async function openApp(t, mode = 'usb') {
             padded.set(bytes, 3);
             characteristic.value = new DataView(padded.buffer, 3, bytes.length);
             for (const fn of notificationListeners) fn({target:characteristic});
+        };
+        window.emitCompanion = data => {
+            const frame = TP7RemoteProtocol.encode(1, 127, data);
+            frame[6] = 64; frame[7] = 0;
+            for (const fragment of TP7RemoteProtocol.blePackets(frame, 247)) window.emitBle(fragment);
         };
         const device = {
             name: 'TP-7', addEventListener() {},
@@ -288,10 +313,10 @@ test('device panel receives fragmented BLE replies and gates transport on a real
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
     await page.locator('#cue-rec-on').click();
     await page.locator('#remote-play').click();
-    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Native Play'));
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Resume'));
     assert.equal(await page.locator('#cue-rec-off').evaluate(el => el.classList.contains('active')), true);
     await page.locator('#remote-stop').click();
-    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Native Stop'));
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Stop'));
     const requests = await page.evaluate(() => window.remoteRequests.map(r => [r.command, ...r.data]));
     assert.deepEqual(requests, [[1], [6, 1, 3, 232], [6, 2, 0, 0], [6, 2, 0, 1], [127, 64], [127, 80], [127, 81]]);
     await page.setViewportSize({width:375,height:1000});
@@ -311,8 +336,8 @@ test('unsupported settings and absent session acknowledgements never become cue 
     await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
     await page.evaluate(() => { window.remoteMode = 'reject-settings'; });
     await page.locator('#remote-inspect').click();
-    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
-    assert.match(await page.locator('#remote-status').innerText(), /rejected command 6/);
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('does not support the settings reader'));
+    assert.equal(await page.locator('#remote-status').getAttribute('data-status'), '');
     assert.equal(await page.locator('#remote-session').isDisabled(), false);
     await page.evaluate(() => { window.remoteMode = 'silent'; });
     await page.locator('#remote-session').click();
@@ -348,4 +373,48 @@ test('an expired device request is not sent after a stalled BLE queue resumes', 
     await page.evaluate(async () => { window.releaseWrite(); await bleWriteQueue; });
     assert.deepEqual(await page.evaluate(() => window.remoteRequests), []);
     assert.equal(await page.locator('#remote-session').isDisabled(), true);
+});
+
+test('live companion data and Jump & play use device positions; rejected seeks never resume', async t => {
+    const page = await openApp(t, 'ble');
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => !document.getElementById('remote-session').disabled);
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
+    assert.match(await page.locator('#remote-file').innerText(), /example_cues_15_tempo_88.wav/);
+    assert.equal(await page.locator('#remote-position').innerText(), '0:34.531');
+    assert.equal(await page.locator('#cue-count').inputValue(), '8');
+    assert.equal(await page.locator('#tempo-source').inputValue(), '');
+    for (const text of ['-1', '1.0001', '100', '999']) {
+        await page.locator('#remote-seek-time').fill(text);
+        assert.equal(await page.locator('#remote-seek').isDisabled(), true);
+    }
+    await page.locator('#remote-seek-time').fill('10.001');
+    await page.evaluate(() => { window.remoteRequests = []; });
+    await page.locator('#remote-seek').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('jump to 10.001'));
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81], [76, 17, 39, 0, 0], [80]]);
+    assert.equal(await page.locator('#remote-position').innerText(), '0:10.001');
+    assert.equal(await page.locator('#remote-playback').innerText(), 'Playing');
+    await page.evaluate(() => {
+        for (let ms = 0; ms < 700; ms++) window.emitCompanion([77, ms & 255, ms >> 8, 0, 0]);
+        window.remoteMode = 'reject-seek'; window.remoteRequests = [];
+    });
+    await page.locator('#remote-seek').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81], [76, 17, 39, 0, 0]]);
+    assert.equal(await page.locator('#remote-playback').innerText(), 'Stopped');
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).positionSamples.length === 600);
+    const report = JSON.parse(await page.locator('#remote-report').textContent());
+    assert.ok(report.events.some(event => event.kind === 'companion-event' && event.decoded?.type === 'file'));
+    assert.equal(report.live.file.filename, 'example_cues_15_tempo_88.wav');
+    assert.equal(report.events.some(event => event.kind === 'unrecognized-sysex'), false);
+    await page.evaluate(() => { window.remoteMode = 'ok'; window.changeFileOnStop = true; window.remoteRequests = []; });
+    await page.locator('#remote-seek').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81]], 'do not seek or resume a newly selected file');
+    assert.equal(await page.locator('#remote-file').innerText(), 'recordings/other.wav');
 });

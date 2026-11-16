@@ -61,14 +61,19 @@ References: [official MIDI reference](https://teenage.engineering/guides/tp-7#mi
 ## Device cue investigation
 
 The **TP-7 Device Access** panel reads device replies over Bluetooth or USB,
-checks the manufacturer's settings catalogue, and provides experimental companion
-session/Play/Stop controls. **It does not yet select existing native cues or read
-their count.** The existing Cue Markers grid still addresses MIDI notes.
+shows the current file, position and playback state, and provides companion
+Resume/Stop and experimental **Jump & play** controls. Jump & play uses a
+millisecond time position. **It does not yet select existing native cues or read
+their count.** Resume does not perform the physical Play button's cue jump.
+The existing Cue Markers grid still addresses MIDI notes.
 
 For Bluefy hardware testing, use **Read TP-7**, then **Start remote session**,
-select cues with +/− on TP-7 and press Play on the device. **Copy report** exports
+enter `10` seconds and try **Jump & play**. For native cue investigation,
+select cues with +/− on TP-7 and press **physical Play on TP-7**. **Copy report** exports
 the received data for analysis without needing a WAV file. See
 [the research and protocol limits](docs/REMOTE_PROTOCOL.md).
+The settings-reader unsupported notice on firmware 1.1.11 does not prevent
+opening a companion session.
 
 ---
 

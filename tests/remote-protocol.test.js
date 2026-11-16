@@ -76,3 +76,45 @@ test('reads bounded settings pages and retains actual device descriptors', () =>
     assert.deepEqual(remote.flattenSettings({ settings: [{ name: 'System', settings: [setting] }] }), [setting]);
     assert.deepEqual(remote.flattenSettings(null), []);
 });
+
+test('decodes captured unsolicited position and playback events without treating them as replies', () => {
+    const position = [240, 0, 32, 118, 25, 64, 64, 0, 127, 6, 77, 99, 6, 0, 0, 247];
+    assert.equal(remote.parse(position), null);
+    assert.deepEqual(remote.parseEvent(position), { command: 127, data: [77, 227, 134, 0, 0] });
+    assert.deepEqual(remote.companionEvent(remote.parseEvent(position).data), { type: 'position', positionMs: 34531 });
+    assert.deepEqual(remote.companionEvent([78, 0]), { type: 'playback', playing: false });
+    assert.deepEqual(remote.companionEvent([78, 1]), { type: 'playback', playing: true });
+    assert.equal(remote.companionEvent([78, 2]), null);
+    assert.equal(remote.companionEvent([77, 1]), null);
+    assert.equal(remote.parseEvent(remote.encode(1, 127, [77, 0, 0, 0, 0])), null, 'outgoing request echoes are not device events');
+    assert.equal(remote.parseEvent(response(1, 127, [78, 1])), null);
+    const malformed = [...position]; malformed[9] = 127;
+    assert.equal(remote.parseEvent(malformed), null);
+});
+
+test('file event reads companion metadata and never derives cue count or BPM from a filename', () => {
+    const data = [75, 128, 187, 0, 0, 0, 62, 73, 0, 5, 26, 11, 16, 22, 35, 0,
+        ...Buffer.from('recordings\0example_cues_15_tempo_88.wav\0')];
+    const decoded = remote.companionEvent(data);
+    assert.equal(decoded.folder, 'recordings');
+    assert.equal(decoded.filename, 'example_cues_15_tempo_88.wav');
+    assert.equal(decoded.sampleRate, 48000);
+    assert.equal(decoded.numFrames, 4800000);
+    assert.equal(decoded.numTracks, 5);
+    assert.equal(decoded.cueCount, undefined);
+    assert.equal(decoded.bpm, undefined);
+    assert.equal(remote.companionEvent(data.slice(0, -1)), null);
+    assert.equal(remote.companionEvent([...data, 0]), null);
+});
+
+test('companion seek uses an exact unsigned little-endian millisecond offset', () => {
+    assert.deepEqual(remote.seekData(10000), [76, 16, 39, 0, 0]);
+    assert.deepEqual(remote.seekData(0x12345678), [76, 120, 86, 52, 18]);
+    assert.deepEqual(remote.seekData(0xFFFFFFFF), [76, 255, 255, 255, 255]);
+    assert.equal(remote.positionFromSeconds('0'), 0);
+    assert.equal(remote.positionFromSeconds('10.001'), 10001);
+    assert.equal(remote.positionFromSeconds('10,01'), 10010);
+    assert.equal(remote.positionFromSeconds('4294967.295'), 0xFFFFFFFF);
+    for (const text of ['', '-1', '1.0001', '1e2', 'NaN', '4294967.296']) assert.equal(remote.positionFromSeconds(text), null);
+    for (const value of [-1, 1.5, NaN, 0x100000000]) assert.throws(() => remote.seekData(value));
+});

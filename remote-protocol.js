@@ -1,6 +1,7 @@
 // TE SysEx envelope and Settings read protocol, verified against TE's web
 // updater. Companion session/transport opcodes have separate experimental
-// evidence. No native cue-selection opcode is known; do not invent one.
+// evidence. Position commands and events were checked against the companion
+// Android app. No native cue-list/selection opcode has been established.
 const TP7RemoteProtocol = (() => {
     const MAX_MESSAGE = 65536;
 
@@ -19,12 +20,14 @@ const TP7RemoteProtocol = (() => {
         return [0xF0, 0, 0x20, 0x76, 0x19, 0x40, 0x60 | (id >> 7), id & 127, command, ...packed, 0xF7];
     }
 
-    function parse(bytes) {
-        if (bytes.length < 11 || bytes.length > MAX_MESSAGE ||
-            ![0xF0, 0, 0x20, 0x76, 0x19, 0x40].every((value, i) => bytes[i] === value) ||
-            bytes.at(-1) !== 0xF7 || (bytes[6] & 0x40) ||
-            bytes.slice(1, -1).some(value => value < 0 || value > 127)) return null;
-        const packed = bytes.slice(10, -1);
+    function isFrame(bytes) {
+        return bytes.length >= 10 && bytes.length <= MAX_MESSAGE &&
+            [0xF0, 0, 0x20, 0x76, 0x19, 0x40].every((value, i) => bytes[i] === value) &&
+            bytes.at(-1) === 0xF7 &&
+            bytes.slice(1, -1).every(value => Number.isInteger(value) && value >= 0 && value <= 127);
+    }
+
+    function unpack(packed) {
         if (packed.length % 8 === 1) return null;
         const data = [];
         for (let offset = 0; offset < packed.length; offset += 8) {
@@ -33,10 +36,68 @@ const TP7RemoteProtocol = (() => {
             if (mask >> count) return null;
             for (let i = 0; i < count; i++) data.push(packed[offset + i + 1] | (((mask >> i) & 1) << 7));
         }
+        return data;
+    }
+
+    function parse(bytes) {
+        if (!isFrame(bytes) || bytes.length < 11 || (bytes[6] & 0x40)) return null;
+        const data = unpack(bytes.slice(10, -1));
+        if (!data) return null;
         return {
             id: (bytes[6] & 0x20) ? ((bytes[6] & 31) << 7) | bytes[7] : 0,
             command: bytes[8], status: bytes[9], data,
         };
+    }
+
+    function parseEvent(bytes) {
+        // Real TP-7 1.1.11 capture: unsolicited events use request framing,
+        // flags 0x40 and ID 0, without a response status byte. They must never
+        // acknowledge a pending request or be confused with our TX echoes.
+        if (!isFrame(bytes) || bytes[6] !== 0x40 || bytes[7] !== 0 || bytes[8] !== 127) return null;
+        const data = unpack(bytes.slice(9, -1));
+        return data?.length ? { command: 127, data } : null;
+    }
+
+    function companionEvent(data) {
+        // Layout checked against companion 1.1.4 and the user's 1.1.11 BLE
+        // capture. These events contain no native cue list or cue selection.
+        if (data[0] === 0x4D && data.length === 5) {
+            const positionMs = data[1] + data[2] * 256 + data[3] * 65536 + data[4] * 16777216;
+            return { type: 'position', positionMs };
+        }
+        if (data[0] === 0x4E && data.length === 2 && (data[1] === 0 || data[1] === 1)) {
+            return { type: 'playback', playing: data[1] === 1 };
+        }
+        if (data[0] === 0x4B && data.length >= 20) {
+            // Companion reads two uint32 LE values, a track-count byte, six
+            // date/time bytes and two null-terminated UTF-8 strings.
+            const separator = data.indexOf(0, 16);
+            const end = separator < 0 ? -1 : data.indexOf(0, separator + 1);
+            if (separator <= 16 || end <= separator + 1 || end !== data.length - 1) return null;
+            try {
+                const decoder = new TextDecoder('utf-8', { fatal: true });
+                const folder = decoder.decode(new Uint8Array(data.slice(16, separator)));
+                const filename = decoder.decode(new Uint8Array(data.slice(separator + 1, end)));
+                if (/[\u0000-\u001F\u007F]/.test(folder + filename)) return null;
+                const u32 = offset => data[offset] + data[offset + 1] * 256 + data[offset + 2] * 65536 + data[offset + 3] * 16777216;
+                return { type: 'file', folder, filename, sampleRate: u32(1), numFrames: u32(5), numTracks: data[9], rawMetadata: data.slice(1, 16) };
+            } catch { return null; }
+        }
+        return null;
+    }
+
+    function positionFromSeconds(text) {
+        const match = /^(\d{1,7})(?:[.,](\d{1,3}))?$/.exec(String(text).trim());
+        if (!match) return null;
+        const ms = Number(match[1]) * 1000 + Number((match[2] || '').padEnd(3, '0'));
+        return Number.isSafeInteger(ms) && ms <= 0xFFFFFFFF ? ms : null;
+    }
+
+    function seekData(positionMs) {
+        if (!Number.isInteger(positionMs) || positionMs < 0 || positionMs > 0xFFFFFFFF) throw new Error('Invalid playback position.');
+        // Tp7NewRecorderService.SetPosition: opcode byte 0x4C followed by a
+        // uint32 millisecond offset, serialized with BitConverter.GetBytes.
+        return [0x4C, positionMs & 255, positionMs >>> 8 & 255, positionMs >>> 16 & 255, positionMs >>> 24];
     }
 
     function blePackets(message, time, packetSize = 20) {
@@ -109,7 +170,7 @@ const TP7RemoteProtocol = (() => {
         return result;
     }
 
-    return { encode, parse, blePackets, BleReceiver, settingsChunk, flattenSettings };
+    return { encode, parse, parseEvent, companionEvent, positionFromSeconds, seekData, blePackets, BleReceiver, settingsChunk, flattenSettings };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = TP7RemoteProtocol;

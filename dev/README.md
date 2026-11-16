@@ -35,6 +35,8 @@ cancellation of stale queued commands, reload/persistence, WAV loading and layou
 They never access a real MIDI device and do not validate TP-7's speed curve.
 The remote-panel tests also simulate fragmented BLE SysEx, successful device
 acknowledgements, unsupported settings, notification failure and session timeout.
+They cover unsolicited companion notifications, position/file parsing, exact
+millisecond seek encoding, failed seeks, and cancellation when the track changes.
 They do not validate native cue navigation; see [REMOTE_PROTOCOL.md](../docs/REMOTE_PROTOCOL.md).
 
 For a hardware check, use a known constant-BPM recording, native playback with
