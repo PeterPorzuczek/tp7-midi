@@ -12,7 +12,7 @@ let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js']);
     server = http.createServer(async (request, response) => {
         const name = request.url === '/' ? '/index.html' : request.url;
         if (!allowed.has(name)) { response.writeHead(404).end(); return; }
@@ -43,6 +43,9 @@ async function openApp(t, mode = 'usb') {
         window.failSend = false;
         window.writeInProgress = false;
         window.releaseWrite = null;
+        window.remoteMode = 'ok';
+        window.remoteRequests = [];
+        const notificationListeners = new Set();
         const output = {
             id: 'tp7', name: 'TP-7', state: 'connected',
             send(bytes) {
@@ -58,6 +61,12 @@ async function openApp(t, mode = 'usb') {
         };
         Object.defineProperty(navigator, 'requestMIDIAccess', { value: async () => access });
         const characteristic = {
+            addEventListener(name, fn) { if (name === 'characteristicvaluechanged') notificationListeners.add(fn); },
+            removeEventListener(name, fn) { notificationListeners.delete(fn); },
+            async startNotifications() {
+                if (window.failNotifications) throw new Error('Notifications unavailable');
+                return this;
+            },
             async writeValueWithoutResponse(packet) {
                 if (window.writeInProgress) throw new Error('Concurrent BLE writes');
                 window.writeInProgress = true;
@@ -69,8 +78,42 @@ async function openApp(t, mode = 'usb') {
                     }
                     if (window.failSend) throw new Error('Test BLE failure');
                     window.bleSent.push([...packet]);
+                    if (packet.includes(0xF0)) {
+                        const decoder = new TP7RemoteProtocol.BleReceiver(bytes => {
+                            const fakeReply = [...bytes];
+                            fakeReply[6] &= ~0x40;
+                            fakeReply.splice(9, 0, 0);
+                            const request = TP7RemoteProtocol.parse(fakeReply);
+                            window.remoteRequests.push(request);
+                            if (window.remoteMode === 'silent') return;
+                            let data = [];
+                            let status = 0;
+                            if (request.command === 1) data = [...new TextEncoder().encode('product:TP-7;sw_version:1.1.11;mode:normal;serial:test')];
+                            if (request.command === 6) {
+                                if (window.remoteMode === 'reject-settings') status = 2;
+                                else if (request.data[0] === 2) {
+                                    const page = request.data[1] * 256 + request.data[2];
+                                    data = [0, page, ...(page ? [] : new TextEncoder().encode(JSON.stringify({settings:[{id:7,name:'MIDI mode',value:'cue'}]}))), 0];
+                                }
+                            }
+                            const reply = TP7RemoteProtocol.encode(request.id, request.command, data);
+                            reply[6] &= ~0x40;
+                            reply.splice(9, 0, status);
+                            for (const fragment of TP7RemoteProtocol.blePackets(reply, 247)) {
+                                characteristic.value = new DataView(fragment.buffer);
+                                for (const fn of notificationListeners) fn({target:characteristic});
+                            }
+                        });
+                        decoder.push(packet);
+                    }
                 } finally { window.writeInProgress = false; }
             },
+        };
+        window.emitBle = bytes => {
+            const padded = new Uint8Array(bytes.length + 6);
+            padded.set(bytes, 3);
+            characteristic.value = new DataView(padded.buffer, 3, bytes.length);
+            for (const fn of notificationListeners) fn({target:characteristic});
         };
         const device = {
             name: 'TP-7', addEventListener() {},
@@ -217,4 +260,92 @@ test('WAV metadata and missing metadata, decimal comma, keyboard Apply and mobil
         await page.setViewportSize({ width: 375, height: 1100 });
         await page.locator('#section-pitch').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'tempo-mobile.png') });
     }
+});
+
+test('device panel receives fragmented BLE replies and gates transport on a real acknowledgement', async t => {
+    const page = await openApp(t, 'ble');
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests), [], 'no automatic vendor commands');
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.startsWith('Read 1 device settings'));
+    assert.match(await page.locator('#remote-device').innerText(), /firmware 1\.1\.11/);
+    assert.match(await page.locator('#remote-status').innerText(), /Native cue selection is not yet validated/);
+    await page.evaluate(() => {
+        window.emitBle([128, 128, 0xB0, 20, 127]);
+        window.emitBle([128, 128, 0xF8, 129, 0xFE]);
+    });
+    await page.waitForFunction(() => {
+        const text = document.getElementById('remote-report').textContent;
+        return text.startsWith('{') && JSON.parse(text).bluetooth.ignoredClockPackets === 1;
+    });
+    const inputReport = JSON.parse(await page.locator('#remote-report').textContent());
+    assert.deepEqual(inputReport.bluetooth.recentPackets.at(-1).bytes, [128, 128, 0xB0, 20, 127]);
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
+    await page.locator('#cue-rec-on').click();
+    await page.locator('#remote-play').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Native Play'));
+    assert.equal(await page.locator('#cue-rec-off').evaluate(el => el.classList.contains('active')), true);
+    await page.locator('#remote-stop').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').textContent.includes('acknowledged Native Stop'));
+    const requests = await page.evaluate(() => window.remoteRequests.map(r => [r.command, ...r.data]));
+    assert.deepEqual(requests, [[1], [6, 1, 3, 232], [6, 2, 0, 0], [6, 2, 0, 1], [127, 64], [127, 80], [127, 81]]);
+    await page.setViewportSize({width:375,height:1000});
+    await page.locator('#section-device-cues summary').click();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    if (process.env.TP7_SCREENSHOT_DIR) await page.locator('#section-device-cues').screenshot({path:path.join(process.env.TP7_SCREENSHOT_DIR, 'device-panel-mobile.png')});
+    await page.evaluate(() => { bleDevice.gatt.connected = false; onBLEDisconnected(); });
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+    assert.equal(await page.locator('#remote-inspect').isDisabled(), true);
+    assert.equal(await page.locator('#remote-report').innerText(), 'No device replies yet.');
+});
+
+test('unsupported settings and absent session acknowledgements never become cue support', async t => {
+    const page = await openApp(t, 'ble');
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
+    await page.evaluate(() => { window.remoteMode = 'reject-settings'; });
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    assert.match(await page.locator('#remote-status').innerText(), /rejected command 6/);
+    assert.equal(await page.locator('#remote-session').isDisabled(), false);
+    await page.evaluate(() => { window.remoteMode = 'silent'; });
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    assert.match(await page.locator('#remote-status').innerText(), /not confirmed/);
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+});
+
+test('notification failure sends no vendor command and preserves the original controls', async t => {
+    const page = await openApp(t, 'ble');
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
+    await page.evaluate(() => { window.failNotifications = true; });
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests), []);
+    await enterTempo(page);
+    await page.locator('#tempo-apply').click();
+    await page.waitForFunction(() => document.getElementById('tempo-result').dataset.status === 'sent');
+});
+
+test('an expired device request is not sent after a stalled BLE queue resumes', async t => {
+    const page = await openApp(t, 'ble');
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length === 18 && !window.writeInProgress);
+    await page.evaluate(() => { window.holdWrite = true; });
+    await page.locator('#cue-rec-off').click();
+    await page.waitForFunction(() => window.releaseWrite !== null);
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => document.getElementById('remote-status').dataset.status === 'error');
+    await page.evaluate(async () => { window.releaseWrite(); await bleWriteQueue; });
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests), []);
+    assert.equal(await page.locator('#remote-session').isDisabled(), true);
 });

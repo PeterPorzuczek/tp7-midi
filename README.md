@@ -58,6 +58,20 @@ References: [official MIDI reference](https://teenage.engineering/guides/tp-7#mi
 
 ---
 
+## Device cue investigation
+
+The **TP-7 Device Access** panel reads device replies over Bluetooth or USB,
+checks the manufacturer's settings catalogue, and provides experimental companion
+session/Play/Stop controls. **It does not yet select existing native cues or read
+their count.** The existing Cue Markers grid still addresses MIDI notes.
+
+For Bluefy hardware testing, use **Read TP-7**, then **Start remote session**,
+select cues with +/− on TP-7 and press Play on the device. **Copy report** exports
+the received data for analysis without needing a WAV file. See
+[the research and protocol limits](docs/REMOTE_PROTOCOL.md).
+
+---
+
 ## Troubleshooting
 
 ### Browsers (READ THIS FIRST)
@@ -216,7 +230,7 @@ These are TP-7 firmware limitations discovered through MIDI experimentation:
 
 | Issue | Description |
 |-------|-------------|
-| **No state feedback** | TP-7 never reports its state via MIDI. You cannot query transport, loop, or cue states. UI may become out of sync after reconnection or physical interaction. |
+| **No standard state queries** | The standard MIDI controls have no documented state queries. Their UI may become out of sync after reconnection or physical interaction. Experimental vendor SysEx replies are investigated separately in the Device Access panel. |
 | **Controller Mode is separate** | TP-7 only sends button events (CC 20-27) in Controller Mode, which is mutually exclusive with receiving MIDI commands. You cannot control AND receive events simultaneously. |
 | **No stop during playback** | In playback mode (after Play or Cue trigger), CC18 value 64 no longer stops. Stop point shifts between 60-61. To stop: set CC18=60 AND Pitch Bend=+708. |
 | **SPD/Pitch Bend disconnect** | The Pitch Bend speed multiplier and SPD on screen SHOULD be the same control, but they're completely separate. Pitch Bend changes are NOT visible on TP-7 display. Likely a firmware bug. |

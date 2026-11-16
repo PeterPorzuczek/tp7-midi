@@ -241,7 +241,9 @@ The constant **+708** is the pitch bend value needed to compensate for CC18=60's
 
 ## State Persistence Warning
 
-**TP-7 does NOT report its state via MIDI.**
+**The standard MIDI interface has no documented state queries.** Vendor SysEx
+replies exist; see [the separate companion-protocol investigation](docs/REMOTE_PROTOCOL.md).
+Those replies do not establish support for reading or selecting existing file cues.
 
 This means:
 - You cannot query current transport state
@@ -311,7 +313,7 @@ This is a known limitation - there's no way to prevent this via MIDI.
 2. **CC18 (Transport)** has TWO completely different modes (stopped vs playing)
 3. **Playback mode** removes the stop position from CC18 - need pitch compensation
 4. **Stop during playback** requires CC18=60 + Pitch Bend=+708
-5. **No state feedback** - TP-7 never reports its state when receiving MIDI commands
+5. **No standard state queries** - The standard control UI has no feedback; vendor SysEx is a separate experimental interface
 6. **Controller Mode is separate** - TP-7 only sends button events in Controller Mode, which is mutually exclusive with receiving commands
 7. **MIDI-CUE setting required** - Must enable MIDI-CUE in TP-7 settings for cue markers to work
 8. **3 speed controls** - SPD (no MIDI access!), Rocker (CC18), Pitch Bend - all multiply during playback

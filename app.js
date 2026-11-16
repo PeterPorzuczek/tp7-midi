@@ -704,6 +704,7 @@ function connect() {
 
 function updateStatus(statusState, text) {
     invalidateTempo();
+    window.tp7RemotePanel?.connectionChanged();
     const statusEl = document.getElementById('status');
     const statusText = document.getElementById('status-text');
     const connectBtn = document.getElementById('connect-btn');
@@ -786,6 +787,7 @@ function onBLEDisconnected() {
 
 function updateBLEStatus(statusState, text) {
     invalidateTempo();
+    window.tp7RemotePanel?.connectionChanged();
     const statusEl = document.getElementById('ble-status');
     const statusText = document.getElementById('ble-status-text');
     statusEl.className = statusState;

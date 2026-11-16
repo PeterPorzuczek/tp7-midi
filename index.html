@@ -56,7 +56,7 @@
             <!-- Global State Warning -->
             <div id="dismiss-global-state" class="info-box dismissible">
                 <span class="icon">ℹ️</span>
-                <span>All states are LOCAL only. TP-7 doesn't report state via MIDI - UI may not match device after reconnection or physical interaction.</span>
+                <span>Standard MIDI control states are LOCAL only and may not match TP-7 after reconnection or physical interaction. The experimental Device Access panel separately shows actual device replies.</span>
                 <button class="dismiss-btn" title="Dismiss">✕</button>
             </div>
 
@@ -97,6 +97,29 @@
             </div>
 
             <!-- Cue Markers -->
+            <div id="section-device-cues" class="section">
+                <h2>TP-7 Device Access <small>Experimental</small></h2>
+                <p class="remote-help">Read replies directly from TP-7 over Bluetooth or USB. No WAV file is needed. Native cue selection is still under investigation; this panel does not yet provide previous/next cue.</p>
+                <div class="remote-actions">
+                    <button id="remote-inspect" class="primary" disabled>Read TP-7</button>
+                    <button id="remote-session" disabled>Start remote session</button>
+                </div>
+                <p id="remote-status" class="remote-status" role="status" aria-live="polite">Connect TP-7 first.</p>
+                <p id="remote-device" class="remote-help">Device information has not been read.</p>
+                <div class="remote-actions">
+                    <button id="remote-play" disabled>Native Play</button>
+                    <button id="remote-stop" disabled>Native Stop</button>
+                </div>
+                <p class="remote-help">Native Play/Stop use the companion protocol, separately from the rocker. Play first disables recording arm and cue recording. These commands have been reported working over USB; Bluetooth behavior needs a device test.</p>
+                <details>
+                    <summary>Device replies and cue investigation</summary>
+                    <p class="remote-help">Read TP-7 checks the manufacturer's settings API. Start remote session listens for companion events. While connected, select cues with +/− on TP-7 and press Play, then copy the report. Unknown replies are kept as raw data; they are not interpreted as a cue list.</p>
+                    <pre id="remote-report" tabindex="0">No device replies yet.</pre>
+                    <button id="remote-copy">Copy report</button>
+                    <textarea id="remote-copy-text" readonly hidden aria-label="Device report for manual copying"></textarea>
+                </details>
+            </div>
+
             <div id="section-cue" class="section">
                 <h2>Cue Markers <small>Note On/Off</small></h2>
                 <div id="dismiss-cue-required" class="warning-box dismissible">
@@ -328,6 +351,8 @@
 
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
+    <script src="remote-protocol.js"></script>
     <script src="app.js"></script>
+    <script src="remote-panel.js"></script>
 </body>
 </html>

@@ -7,12 +7,13 @@ Technical setup for local development and testing.
 ## Tests
 
 The production app is still plain HTML/CSS/JS with no build step. Deploy the root
-files together, including `tempo.js` and `wav-tempo.js`, to GitHub Pages.
+files together, including `tempo.js`, `wav-tempo.js`, `remote-protocol.js` and
+`remote-panel.js`, to GitHub Pages.
 
 Run the arithmetic and WAV metadata tests with Node.js 20 or newer:
 
 ```sh
-node --test tests/tempo.test.js tests/wav-tempo.test.js
+node --test tests/tempo.test.js tests/wav-tempo.test.js tests/remote-protocol.test.js
 ```
 
 They cover every representable pitch, exact half-step boundaries, an independent
@@ -32,6 +33,9 @@ of Playwright's bundled browser. `TP7_SCREENSHOT_DIR` optionally saves desktop a
 mobile screenshots. These tests cover MIDI packets, retries, disconnection,
 cancellation of stale queued commands, reload/persistence, WAV loading and layout.
 They never access a real MIDI device and do not validate TP-7's speed curve.
+The remote-panel tests also simulate fragmented BLE SysEx, successful device
+acknowledgements, unsupported settings, notification failure and session timeout.
+They do not validate native cue navigation; see [REMOTE_PROTOCOL.md](../docs/REMOTE_PROTOCOL.md).
 
 For a hardware check, use a known constant-BPM recording, native playback with
 on-device SPD=1× and external clock sync disabled. Measure recorded output against
