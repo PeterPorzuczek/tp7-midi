@@ -763,8 +763,109 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* Pitch Bend / Speed Modifier */
+.tempo-panel {
+    background: var(--bg);
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    margin-bottom: 16px;
+}
+
+.tempo-panel h3 {
+    font-size: 1rem;
+    font-weight: 500;
+    margin-bottom: 16px;
+}
+
+.tempo-inputs {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.tempo-inputs label {
+    display: block;
+    font-size: 0.8rem;
+    margin-bottom: 8px;
+}
+
+.tempo-inputs label small {
+    color: var(--text-dim);
+    font-weight: normal;
+    display: block;
+    min-height: 1em;
+}
+
+.tempo-inputs input {
+    width: 100%;
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface);
+    color: var(--text);
+    padding: 12px;
+    font: 1.25rem var(--font-mono);
+}
+
+.tempo-inputs > div {
+    display: flex;
+    flex-direction: column;
+}
+
+.tempo-inputs input {
+    margin-top: auto;
+}
+
+.tempo-inputs input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+#tempo-apply {
+    width: 100%;
+    margin-top: 14px;
+}
+
+.tempo-result {
+    margin: 12px 0;
+    line-height: 1.6;
+    font: 0.8rem/1.6 var(--font-mono);
+    overflow-wrap: anywhere;
+}
+
+.tempo-result[data-status="error"] {
+    color: var(--warning);
+}
+
+.tempo-result[data-status="sent"] {
+    color: var(--success);
+}
+
+.tempo-file-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    overflow-wrap: anywhere;
+}
+
+.tempo-file-row button {
+    font-size: 0.75rem;
+    padding: 8px 10px;
+}
+
+.tempo-help {
+    margin-top: 10px;
+    color: #b0b0b0;
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
 .speed-display {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     gap: 12px;
     margin-bottom: 15px;

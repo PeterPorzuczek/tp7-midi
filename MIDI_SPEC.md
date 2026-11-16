@@ -183,6 +183,51 @@ Tape movement = Rocker (CC18) only
 Final speed = SPD (screen) × Rocker (CC18) × Pitch Bend
 ```
 
+### BPM Matching and Precision
+
+The browser's **Match BPM** feature uses the experimental asymmetric mapping above.
+Teenage Engineering documents Pitch Bend for playback speed but does **not** publish
+this curve. Hardware validation is still required; numerical accuracy does not
+establish accuracy of the physical playback speed.
+
+With on-device SPD at unity, external sync off and the rocker released during
+native playback, let `r = targetBpm / sourceBpm`:
+
+```
+r < 1: idealPitch = (r - 1) × 32768 / 3
+r ≥ 1: idealPitch = (r - 1) × 8192
+```
+
+Choose the nearest integer pitch. Exact half-step ties choose the pitch closer to
+zero. Input decimals, division and rounding use BigInt fractions, so no rounded
+display value feeds back into the calculation. Each Apply is absolute relative to
+the source BPM, not relative to the previously applied pitch. The source must be
+the original track BPM, not an already speed-adjusted BPM.
+
+The positive endpoint is **8191**, giving **1.9998779296875×**, not exactly 2×.
+The negative endpoint is exactly **0.25×**. Out-of-range requests are rejected.
+Within the range, the maximum quantization error is half a step:
+
+- Slower than unity: `sourceBpm × 3 / 65536` BPM.
+- Faster than unity: `sourceBpm / 16384` BPM.
+
+Apply sends `[0xB0, 18, 64]` followed by the 14-bit Pitch Bend, as one USB send or
+one BLE packet with timestamps for each message. This releases the rocker for
+native playback and avoids the application's unrelated +708 stop compensation.
+It does not start native playback or read/reset the device's on-screen SPD.
+“Immediate” means no software ramp or scheduled correction; connection latency
+and firmware processing time still apply. There is no device acknowledgement.
+
+The BPM preview reports the result of this mapping and its signed quantization
+error, not a measured tempo. Neither a zero mathematical error nor receipt of a
+MIDI clock proves that the audio plays at that BPM. The app does not infer a
+track's exact metadata from clock timing.
+
+Stored BPM can be read from a user-selected **RIFF/WAVE ACID** chunk (little-endian
+float32 at payload offset 20). The reader skips audio data, checks chunk boundaries
+and padding, and rejects conflicting metadata. Missing/invalid BPM requires manual
+input. Other file formats, including RF64 and MP3, currently require manual input.
+
 ### Stop Point During Playback
 
 **To stop tape during playback:**

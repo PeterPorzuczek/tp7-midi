@@ -12,6 +12,11 @@ const BLE_MIDI_CHARACTERISTIC = '7772e5db-3868-4112-a1a9-f2669d106bf3';
 let bleDevice = null;
 let bleMidiCharacteristic = null;
 let connectionType = null; // 'usb' or 'ble'
+let bleWriteQueue = Promise.resolve();
+let tempoRevision = 0;
+let tempoPending = false;
+let tempoLastSent = null;
+let tempoFileRevision = 0;
 
 // =====================================================================
 // Constants
@@ -85,21 +90,48 @@ if (!navigator.bluetooth) {
 // MIDI Utilities (USB + BLE)
 // =====================================================================
 
-// Send raw MIDI bytes - works with both USB and BLE
-function sendMidi(bytes) {
+function isMidiConnected() {
+    return (connectionType === 'usb' && midiOutput && midiOutput.state !== 'disconnected') ||
+        (connectionType === 'ble' && bleMidiCharacteristic && bleDevice?.gatt.connected);
+}
+
+// Send a batch immediately on USB, or in one ordered BLE write. The Promise
+// confirms delivery to the browser/transport, not a TP-7 state acknowledgement.
+function transmitMidiBatch(messages, isCurrent = () => true) {
     if (connectionType === 'ble' && bleMidiCharacteristic) {
-        // BLE MIDI format: header + timestamp + midi bytes
-        const timestamp = Date.now() & 0x1FFF;
-        const header = 0x80 | ((timestamp >> 7) & 0x3F);
-        const timestampLow = 0x80 | (timestamp & 0x7F);
-        const packet = new Uint8Array([header, timestampLow, ...bytes]);
-        bleMidiCharacteristic.writeValueWithoutResponse(packet);
-        return true;
-    } else if (connectionType === 'usb' && midiOutput) {
-        midiOutput.send(bytes);
-        return true;
+        const characteristic = bleMidiCharacteristic;
+        const write = bleWriteQueue.then(async () => {
+            if (connectionType !== 'ble' || bleMidiCharacteristic !== characteristic || !isMidiConnected()) {
+                throw new Error('Bluetooth disconnected. Reconnect and apply again.');
+            }
+            if (!isCurrent()) throw new Error('Tempo settings changed before sending. Apply again.');
+            const timestamp = Math.floor(performance.now()) & 0x1FFF;
+            const header = 0x80 | ((timestamp >> 7) & 0x3F);
+            const timestampLow = 0x80 | (timestamp & 0x7F);
+            const packet = new Uint8Array([header, ...messages.flatMap(bytes => [timestampLow, ...bytes])]);
+            await characteristic.writeValueWithoutResponse(packet);
+        });
+        // Keep later writes usable after a failure; callers still receive it.
+        bleWriteQueue = write.catch(() => {});
+        return write;
     }
-    return false;
+    if (connectionType === 'usb' && isMidiConnected()) {
+        try {
+            if (!isCurrent()) throw new Error('Tempo settings changed. Apply again.');
+            midiOutput.send(messages.flat());
+            return Promise.resolve();
+        } catch (error) {
+            return Promise.reject(error);
+        }
+    }
+    return Promise.reject(new Error('Connect TP-7 before applying tempo.'));
+}
+
+// Existing controls retain their synchronous availability check.
+function sendMidi(bytes) {
+    if (!isMidiConnected()) return false;
+    transmitMidiBatch([bytes]).catch(error => log(`MIDI send failed: ${error.message}`));
+    return true;
 }
 
 function sendCC(cc, value, channel = 1) {
@@ -219,6 +251,7 @@ function ccToSlider(cc) {
 }
 
 function updateTransportState(value) {
+    invalidateTempo();
     state.transport = value;
 
     document.getElementById('speed-slider').value = ccToSlider(value);
@@ -264,17 +297,58 @@ function updateTransportState(value) {
 }
 
 function updatePitchDisplay(pitch) {
-    // PITCH_MIN = x0.25 (slowest), 0 = x1, PITCH_MAX = x2
-    // Asymmetric: negative side 0.25-1, positive side 1-2
-    let multiplier;
-    if (pitch < 0) {
-        multiplier = 1 + (pitch / MIDI.PITCH_OFFSET) * 0.75;
-    } else {
-        multiplier = 1 + (pitch / MIDI.PITCH_OFFSET);
-    }
-    const multiplierStr = `x${multiplier.toFixed(2)}`;
+    invalidateTempo();
+    const multiplierStr = `x${TP7Tempo.multiplier(pitch).toFixed(8)}`;
     document.getElementById('speed-multiplier').textContent = multiplierStr;
     document.getElementById('pitch-value').textContent = `(pitch: ${pitch})`;
+}
+
+// =====================================================================
+// BPM matching
+// =====================================================================
+
+function invalidateTempo() {
+    tempoRevision++;
+    tempoLastSent = null;
+    updateTempoPreview();
+}
+
+function tempoInputs() {
+    return [document.getElementById('tempo-source').value, document.getElementById('tempo-target').value];
+}
+
+function tempoNumber(value) {
+    // Keep small nonzero errors visible instead of rounding them to zero.
+    if (value !== 0 && Math.abs(value) < 0.00000001) return value.toExponential(6);
+    return value.toFixed(8).replace(/\.?0+$/, '');
+}
+
+function updateTempoPreview() {
+    const button = document.getElementById('tempo-apply');
+    const result = document.getElementById('tempo-result');
+    if (!button || !result) return;
+    button.disabled = true;
+    button.textContent = tempoPending ? 'Sending…' : 'Apply';
+    result.dataset.status = '';
+    const inputs = tempoInputs();
+    if (inputs.some(value => !value.trim())) {
+        result.textContent = 'Enter the track BPM and target BPM.';
+        return;
+    }
+    try {
+        const match = TP7Tempo.calculate(...inputs);
+        const difference = match.exact ? '0 (exact in this mapping)' :
+            `${match.errorBpm > 0 ? '+' : ''}${tempoNumber(match.errorBpm)}`;
+        const sent = tempoLastSent === JSON.stringify(inputs);
+        const prefix = sent ? 'Sent · predicted' : 'Preview';
+        result.textContent = `${prefix}: ${tempoNumber(match.achievedBpm)} BPM · Δ ${difference} BPM · speed ×${tempoNumber(match.multiplier)} · pitch ${match.pitch}.`;
+        if (!isMidiConnected()) result.textContent += ' Connect TP-7 to apply.';
+        if (sent) result.dataset.status = 'sent';
+        button.disabled = tempoPending || !isMidiConnected();
+    } catch (error) {
+        result.textContent = error.message;
+        result.dataset.status = 'error';
+    }
 }
 
 function setTransport(value) {
@@ -557,6 +631,7 @@ async function initMIDI() {
             // Check if our connected device was disconnected
             if (midiOutput && e.port.id === midiOutput.id && e.port.state === 'disconnected') {
                 midiOutput = null;
+                if (connectionType === 'usb') connectionType = null;
                 updateStatus('disconnected', 'TP-7 disconnected');
                 log('TP-7 disconnected');
             }
@@ -628,6 +703,7 @@ function connect() {
 }
 
 function updateStatus(statusState, text) {
+    invalidateTempo();
     const statusEl = document.getElementById('status');
     const statusText = document.getElementById('status-text');
     const connectBtn = document.getElementById('connect-btn');
@@ -709,6 +785,7 @@ function onBLEDisconnected() {
 }
 
 function updateBLEStatus(statusState, text) {
+    invalidateTempo();
     const statusEl = document.getElementById('ble-status');
     const statusText = document.getElementById('ble-status-text');
     statusEl.className = statusState;
@@ -724,6 +801,93 @@ document.addEventListener('DOMContentLoaded', () => {
     createChannelStrips();
     createGainControls();
     createCueButtons();
+
+    for (const id of ['tempo-source', 'tempo-target']) {
+        document.getElementById(id).addEventListener('input', () => {
+            if (id === 'tempo-source') {
+                // A slow file read must not overwrite a newer manual edit.
+                tempoFileRevision++;
+                document.getElementById('tempo-source-info').textContent = 'Manual entry · BPM is not available over MIDI.';
+            }
+            invalidateTempo();
+        });
+    }
+
+    document.getElementById('tempo-read-file').addEventListener('click', () => {
+        document.getElementById('tempo-file').click();
+    });
+
+    document.getElementById('tempo-file').addEventListener('change', async event => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const revision = ++tempoFileRevision;
+        const source = document.getElementById('tempo-source');
+        const info = document.getElementById('tempo-source-info');
+        // Never retain the previous track's BPM when reading another track.
+        source.value = '';
+        invalidateTempo();
+        info.textContent = `Reading ${file.name}…`;
+        event.target.value = ''; // Allow choosing the same file again.
+        try {
+            const bpm = await TP7WavTempo.read(file);
+            if (revision !== tempoFileRevision) return;
+            if (bpm === null) {
+                info.textContent = `${file.name}: no saved BPM. Enter the track BPM manually.`;
+            } else {
+                source.value = bpm.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
+                info.textContent = `${file.name} · saved WAV BPM (ACID metadata)`;
+            }
+        } catch (error) {
+            if (revision !== tempoFileRevision) return;
+            info.textContent = `${error.message} Enter BPM manually.`;
+        }
+        invalidateTempo();
+    });
+
+    document.getElementById('tempo-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        if (tempoPending) return;
+        const revision = tempoRevision;
+        const inputs = tempoInputs();
+        let failure = null;
+        try {
+            const match = TP7Tempo.calculate(...inputs);
+            if (!isMidiConnected()) throw new Error('Connect TP-7 before applying tempo.');
+            tempoPending = true;
+            tempoLastSent = null;
+            updateTempoPreview();
+            // CC18=64 releases the rocker during native playback. Do not use
+            // setTransport(): its stop compensation would overwrite our pitch.
+            await transmitMidiBatch([
+                [0xB0, TP7.CC_TRANSPORT, TP7.SPEED_STOP],
+                TP7Tempo.pitchBytes(match.pitch),
+            ], () => revision === tempoRevision);
+            if (revision !== tempoRevision) return;
+            document.getElementById('pitch-bend').value = match.pitch;
+            document.getElementById('pitch-manual').value = match.pitch;
+            updatePitchDisplay(match.pitch);
+            document.querySelectorAll('.pitch-preset').forEach(button => {
+                button.classList.toggle('active', Number(button.dataset.pitch) === match.pitch);
+            });
+            document.getElementById('playmode-comp').checked = true;
+            updatePlaybackModeUI(true);
+            updateTransportState(TP7.SPEED_STOP);
+            document.getElementById('rocker-manual').value = TP7.SPEED_STOP;
+            tempoLastSent = JSON.stringify(inputs);
+            saveControlState();
+            log(`Tempo speed sent: pitch ${match.pitch}; predicted ${tempoNumber(match.achievedBpm)} BPM`);
+        } catch (error) {
+            if (revision === tempoRevision) failure = error.message;
+        } finally {
+            tempoPending = false;
+            updateTempoPreview();
+            if (failure) {
+                const result = document.getElementById('tempo-result');
+                result.textContent = `Tempo was not confirmed sent. ${failure}`;
+                result.dataset.status = 'error';
+            }
+        }
+    });
 
     // Send All mixer values
     document.getElementById('mixer-send-all').addEventListener('click', () => {
@@ -1168,8 +1332,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             // Restore pitch bend
             if (controlState.pitchBend !== undefined) {
-                document.getElementById('pitch-bend').value = controlState.pitchBend;
-                updatePitchDisplay(controlState.pitchBend);
+                const pitch = Number(controlState.pitchBend);
+                if (Number.isInteger(pitch) && pitch >= MIDI.PITCH_MIN && pitch <= MIDI.PITCH_MAX) {
+                    document.getElementById('pitch-bend').value = pitch;
+                    document.getElementById('pitch-manual').value = pitch;
+                    updatePitchDisplay(pitch);
+                    document.querySelectorAll('.pitch-preset').forEach(button => {
+                        button.classList.toggle('active', Number(button.dataset.pitch) === pitch);
+                    });
+                }
             }
 
             // Restore transport
@@ -1194,8 +1365,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('playmode-comp').checked = controlState.playmodeComp;
                 if (controlState.playmodeComp) {
                     updatePlaybackModeUI(true);
-                    document.getElementById('pitch-bend').value = TP7.STOP_COMPENSATION_PITCH;
-                    updatePitchDisplay(TP7.STOP_COMPENSATION_PITCH);
                 }
             }
 
@@ -1276,7 +1445,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Keyboard bindings
     document.addEventListener('keydown', (e) => {
         // Ignore if typing in an input
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(e.target.tagName) || e.target.isContentEditable) return;
 
         // Close popup on Escape
         if (e.key === 'Escape') {

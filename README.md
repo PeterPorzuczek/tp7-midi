@@ -4,7 +4,9 @@ Web app to control your **Teenage Engineering TP-7** field recorder via MIDI and
 
 Works on phones, tablets, and computers - right in your browser.
 
-**Live App:** https://lucidyan.github.io/tp7-midi
+**Live App:** https://peterporzuczek.github.io/tp7-midi/
+
+Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with BPM matching.
 
 ---
 
@@ -14,6 +16,45 @@ Works on phones, tablets, and computers - right in your browser.
 2. Connect your TP-7 via USB or Bluetooth
 3. Tap "Connect" and select your device
 4. Control playback, recording, cue points, loops, and more
+
+---
+
+## Match a track to a target BPM
+
+In **Playback Speed → Match BPM**, enter the track's BPM at its original speed
+and the target BPM, then press **Apply**. Decimal points and decimal commas are
+accepted. You can also use **Read BPM from WAV** to read saved ACID tempo metadata
+from a local copy of the track. If the file has no valid BPM, enter it manually.
+The file is read locally and is never uploaded or modified. This is metadata
+reading, not audio beat detection or automatic access to the TP-7's selected file.
+
+Start playback using the TP-7's physical Play button or a cue, set the device's
+own SPD to **1×**, and disable external clock sync before applying. Apply releases
+the MIDI rocker (CC18=64) and sends the calculated Pitch Bend together, without a
+ramp or a correction loop. USB and Bluetooth are supported. The device's screen
+SPD is a separate control and will not change. Changing speed/rocker controls
+afterwards replaces the applied setting; use Apply again if needed.
+
+**Precision:** the calculation uses exact decimal/rational arithmetic and chooses
+the MIDI value with the smallest absolute BPM error under the experimental mapping
+in [MIDI_SPEC.md](MIDI_SPEC.md#bpm-matching-and-precision). The preview shows the
+predicted BPM and signed error. For example, **120 → 128** sends pitch **+546**,
+predicting **127.998046875 BPM**, an error of **−0.001953125 BPM**. MIDI cannot
+represent every requested ratio exactly. Targets outside the actual range
+**0.25×–1.9998779296875×** are rejected rather than silently clamped.
+
+TP-7's documented MIDI interface has no query for the current track's stored BPM
+or screen SPD. Its official documentation identifies Pitch Bend as a speed control
+but does not specify the transfer curve. This project's curve remains experimental;
+the preview is **not a hardware measurement or a guarantee of the audible BPM**.
+An accurate source BPM and neutral device settings are necessary. The app reports
+“Sent” only after the transport accepts the message; TP-7 provides no acknowledgement
+of the resulting speed. BPM inputs are not restored on reload because the selected
+track cannot be verified. The existing speed setting is saved as before.
+
+References: [official MIDI reference](https://teenage.engineering/guides/tp-7#midi-reference),
+[TP-7 WAV Editor author](https://www.ecstasyjones.com/tp-7-wav-editor),
+[ACID metadata layout in wavesync](https://github.com/pixelate/wavesync/blob/main/lib/wavesync/acid_chunk.rb).
 
 ---
 

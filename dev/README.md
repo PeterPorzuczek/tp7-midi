@@ -4,6 +4,42 @@ Technical setup for local development and testing.
 
 ---
 
+## Tests
+
+The production app is still plain HTML/CSS/JS with no build step. Deploy the root
+files together, including `tempo.js` and `wav-tempo.js`, to GitHub Pages.
+
+Run the arithmetic and WAV metadata tests with Node.js 20 or newer:
+
+```sh
+node --test tests/tempo.test.js tests/wav-tempo.test.js
+```
+
+They cover every representable pitch, exact half-step boundaries, an independent
+exhaustive nearest-value check, invalid/out-of-range BPM, metadata corruption and
+skipping large audio payloads.
+
+Optional browser integration tests use Playwright with simulated USB/BLE devices:
+
+```sh
+npm install --no-save --package-lock=false playwright
+npx playwright install chromium
+node --test tests/browser.test.cjs
+```
+
+Set `TP7_BROWSER_PATH` to an installed Chromium/Edge executable to use it instead
+of Playwright's bundled browser. `TP7_SCREENSHOT_DIR` optionally saves desktop and
+mobile screenshots. These tests cover MIDI packets, retries, disconnection,
+cancellation of stale queued commands, reload/persistence, WAV loading and layout.
+They never access a real MIDI device and do not validate TP-7's speed curve.
+
+For a hardware check, use a known constant-BPM recording, native playback with
+on-device SPD=1× and external clock sync disabled. Measure recorded output against
+the predicted BPM at unity and several negative/positive pitches on the actual
+firmware. The current mapping must be treated as experimental until validated.
+
+---
+
 ## Local Testing
 
 Web MIDI and Web Bluetooth require HTTPS. Self-signed certs don't work well with Safari (macOS/iOS). Use **mkcert** for proper local HTTPS.
