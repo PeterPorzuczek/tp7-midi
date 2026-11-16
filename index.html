@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TP-7 MIDI</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
-    <link rel="stylesheet" href="styles.css?v=20261116-2">
+    <link rel="stylesheet" href="styles.css?v=20261117-1">
 </head>
 <body>
     <div class="container">
@@ -99,7 +99,7 @@
             <!-- Cue Markers -->
             <div id="section-device-cues" class="section">
                 <h2>TP-7 Device Access <small>Experimental</small></h2>
-                <p class="remote-help">Read replies directly from TP-7 over Bluetooth or USB. No WAV file is needed. Native cue selection is still under investigation; this panel does not yet provide previous/next cue.</p>
+                <p class="remote-help">Read the current file, its length and playback position directly from TP-7 over Bluetooth or USB. Start a remote session to use the DJ Jump Grid below. No local WAV file is needed.</p>
                 <div class="remote-actions">
                     <button id="remote-inspect" class="primary" disabled>Read TP-7</button>
                     <button id="remote-session" disabled>Start remote session</button>
@@ -125,11 +125,42 @@
                 <p id="remote-seek-help" class="remote-help">Experimental: stops, sets the time, then resumes playback using the companion protocol. Enter seconds with up to 3 decimal places. Automatic reading of saved cue positions is not available yet.</p>
                 <details>
                     <summary>Device replies and cue investigation</summary>
-                    <p class="remote-help">Start remote session receives file and playback events. To capture cue jumps, select a cue with +/− on TP-7, then press the physical Play button on TP-7. Repeat for another cue and copy the report. Resume in this app does not trigger that jump. File names are not interpreted as cue counts or BPM.</p>
+                    <p class="remote-help">Start remote session receives file and playback events. To capture cue jumps, select a cue with +/− on TP-7, then press the physical Play button on TP-7. Repeat for another cue and copy the report. Resume in this app does not trigger that jump. Native cue positions and BPM are not present in these events. The DJ grid can use explicit BPM labels in a filename; it never treats a filename as a native cue count.</p>
                     <pre id="remote-report" tabindex="0">No device replies yet.</pre>
                     <button id="remote-copy">Copy report</button>
                     <textarea id="remote-copy-text" readonly hidden aria-label="Device report for manual copying"></textarea>
                 </details>
+            </div>
+
+            <div id="section-dj" class="section">
+                <h2>DJ Jump Grid <small>Beat / bar jumps</small></h2>
+                <p id="dj-track" class="dj-track">Waiting for the current track…</p>
+                <div class="dj-controls">
+                    <div>
+                        <label for="dj-bpm">Original track BPM</label>
+                        <input id="dj-bpm" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 88" maxlength="32" aria-describedby="dj-bpm-source" disabled>
+                    </div>
+                    <div>
+                        <label for="dj-interval">Jump every</label>
+                        <select id="dj-interval" disabled></select>
+                    </div>
+                    <div>
+                        <label for="dj-meter">Beats per bar</label>
+                        <select id="dj-meter" disabled></select>
+                    </div>
+                </div>
+                <p id="dj-bpm-source" class="remote-help"></p>
+                <p class="remote-help">Beat 1 starts at 0:00. Use the BPM of the original file, even when playback speed is changed. Beats are quarter notes (4 beats per bar for 4/4). The grid assumes a constant tempo; it does not detect drums.</p>
+                <p id="dj-summary" class="dj-summary" role="status"></p>
+                <p id="dj-connection" class="remote-help"></p>
+                <div id="dj-grid" class="dj-grid" role="group" aria-label="Generated track jumps"></div>
+                <div id="dj-paging" class="dj-paging" hidden>
+                    <button id="dj-prev" type="button">← Previous</button>
+                    <label for="dj-page">Page <input id="dj-page" type="number" min="1" step="1" value="1" inputmode="numeric"> <span id="dj-page-total"></span></label>
+                    <button id="dj-next" type="button">Next →</button>
+                </div>
+                <p id="dj-action-status" class="remote-status" role="status" aria-live="polite"></p>
+                <p class="remote-help">Generated time jumps, saved only in this browser; existing TP-7 cues stay intact. A tap stops playback, seeks and resumes. Positions are rounded once to the nearest millisecond. Bluetooth and device response add latency: jumps are not quantized to a live beat or synchronized with another deck.</p>
             </div>
 
             <div id="section-cue" class="section">
@@ -363,8 +394,10 @@
 
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
-    <script src="remote-protocol.js?v=20261116-2"></script>
+    <script src="remote-protocol.js?v=20261117-1"></script>
+    <script src="dj-cues.js?v=20261117-1"></script>
     <script src="app.js"></script>
-    <script src="remote-panel.js?v=20261116-2"></script>
+    <script src="remote-panel.js?v=20261117-1"></script>
+    <script src="dj-panel.js?v=20261117-1"></script>
 </body>
 </html>

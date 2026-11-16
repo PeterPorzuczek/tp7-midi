@@ -17,6 +17,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let identified = false;
     let sessionConfirmed = false;
     let renderTimer = null;
+    let fileRevision = 0;
+
+    const fileKey = file => file ? JSON.stringify([file.folder, file.filename, file.sampleRate, file.numFrames, file.numTracks]) : null;
+    const getState = () => ({ file: report.live.file ? { ...report.live.file } : null,
+        positionMs: report.live.position?.positionMs ?? null,
+        connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy });
 
     function renderReport() {
         if (renderTimer !== null) return;
@@ -44,10 +50,12 @@ document.addEventListener('DOMContentLoaded', () => {
         element('remote-position').textContent = ms === undefined ? '—' :
             `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
         element('remote-playback').textContent = !playback ? 'Unknown' : playback.playing ? 'Playing' : 'Stopped';
-        element('remote-file-info').textContent = file ? `${file.sampleRate} Hz · ${file.numTracks} tracks` : '';
+        const duration = file?.sampleRate > 0 ? TP7DJCues.formatTime(Math.round(file.numFrames * 1000 / file.sampleRate)) : '—';
+        element('remote-file-info').textContent = file ? `${duration} · ${file.sampleRate} Hz · ${file.numTracks} tracks` : '';
     }
 
     function resetLive() {
+        fileRevision++;
         report.live = { file: null, position: null, playback: null };
         report.positionSamples = [];
         showLive();
@@ -68,7 +76,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             if (decoded.type === 'file') {
                 const previous = report.live.file;
-                if (!previous || previous.folder !== decoded.folder || previous.filename !== decoded.filename) {
+                if (fileKey(previous) !== fileKey(decoded)) {
+                    fileRevision++;
                     report.live.position = null;
                     report.positionSamples = [];
                 }
@@ -96,6 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
         element('remote-play').disabled = busy || !connected || !sessionConfirmed;
         element('remote-stop').disabled = busy || !connected || !sessionConfirmed;
         element('remote-seek').disabled = busy || !connected || !sessionConfirmed || seekPosition() === null;
+        document.dispatchEvent(new CustomEvent('tp7-remote-state', { detail: getState() }));
     }
 
     function connectionChanged() {
@@ -252,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function run(operation) {
-        if (busy) return;
+        if (busy) return false;
         connectionChanged();
         const token = generation;
         busy = true;
@@ -261,8 +271,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!isMidiConnected()) throw new Error('Connect TP-7 first.');
             await listen(token);
             await operation(token);
+            return true;
         } catch (error) {
             if (token === generation) { addEvent('error', { message: error.message }); status(error.message, true); }
+            return false;
         } finally { busy = false; buttons(); }
     }
 
@@ -320,7 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
         status('Requesting companion session…');
         await request(127, [0x40], token);
         sessionConfirmed = true;
-        status('TP-7 acknowledged the session. Select cues with +/− on the device to capture any events.');
+        status('TP-7 acknowledged the session. DJ Jump Grid uses the current file and its length.');
     }));
 
     async function transport(opcode) {
@@ -340,23 +352,34 @@ document.addEventListener('DOMContentLoaded', () => {
     element('remote-play').addEventListener('click', () => transport(0x50));
     element('remote-stop').addEventListener('click', () => transport(0x51));
     element('remote-seek-time').addEventListener('input', buttons);
-    element('remote-seek').addEventListener('click', () => run(async token => {
-        const positionMs = seekPosition();
-        if (!sessionConfirmed || positionMs === null) throw new Error('Enter a valid time within the current track and start a remote session.');
+    function jumpTo(positionMs, selectionIsCurrent = () => true) {
         const file = report.live.file;
-        const isCurrent = () => token === generation && report.live.file?.folder === file.folder &&
-            report.live.file?.filename === file.filename && seekPosition() === positionMs;
-        await transmitMidiBatch([[0xB0, TP7.CC_REC_ARM, 0], [0xB0, TP7.CC_CUE_REC, 0]], isCurrent);
-        state.cueRecMode = false;
-        element('cue-rec-off').classList.add('active');
-        element('cue-rec-on').classList.remove('active', 'rec-active');
-        status('Stopping playback before the position jump…');
-        await request(127, [0x51], token, isCurrent);
-        status('Waiting for the position command acknowledgement…');
-        await request(127, protocol.seekData(positionMs), token, isCurrent);
-        await request(127, [0x50], token, isCurrent);
-        status(`TP-7 acknowledged a jump to ${(positionMs / 1000).toFixed(3)} s and playback. Check the reported position on the device. This selects a time, not a native cue number.`);
-    }));
+        const revision = fileRevision;
+        const connection = generation;
+        return run(async token => {
+            if (!sessionConfirmed || !Number.isInteger(positionMs) || positionMs < 0 || positionMs > 0xFFFFFFFF ||
+                !file || file.sampleRate <= 0 || positionMs * file.sampleRate >= file.numFrames * 1000) {
+                throw new Error('Enter a valid time within the current track and start a remote session.');
+            }
+            const isCurrent = () => token === connection && token === generation && revision === fileRevision &&
+                fileKey(report.live.file) === fileKey(file) && selectionIsCurrent();
+            await transmitMidiBatch([[0xB0, TP7.CC_REC_ARM, 0], [0xB0, TP7.CC_CUE_REC, 0]], isCurrent);
+            state.cueRecMode = false;
+            element('cue-rec-off').classList.add('active');
+            element('cue-rec-on').classList.remove('active', 'rec-active');
+            status('Stopping playback before the position jump…');
+            await request(127, [0x51], token, isCurrent);
+            status('Waiting for the position command acknowledgement…');
+            await request(127, protocol.seekData(positionMs), token, isCurrent);
+            await request(127, [0x50], token, isCurrent);
+            if (!isCurrent()) throw new Error('Track, connection or jump selection changed.');
+            status(`TP-7 acknowledged a jump to ${(positionMs / 1000).toFixed(3)} s and playback. Check the reported position on the device. This selects a time, not a native cue number.`);
+        });
+    }
+    element('remote-seek').addEventListener('click', () => {
+        const positionMs = seekPosition();
+        jumpTo(positionMs, () => seekPosition() === positionMs);
+    });
     element('remote-copy').addEventListener('click', async () => {
         const text = JSON.stringify(report, null, 2);
         try { await navigator.clipboard.writeText(text); status('Report copied.'); }
@@ -370,6 +393,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.tp7RemotePanel = { connectionChanged };
+    window.tp7RemotePanel = { connectionChanged, getState, jumpTo };
     connectionChanged();
 });

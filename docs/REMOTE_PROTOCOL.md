@@ -5,6 +5,8 @@ cue markers**, without asking the user for a WAV. Automatic marker enumeration
 and cue-number selection are **not yet implemented**. **TP-7 Device Access** now
 reads live track/transport events and implements the companion application's
 position command. A time jump is not selection of a device-native cue number.
+On 2026-11-17 the user confirmed manual time jumps work and requested generated
+beat/bar jumps as an alternative. That workflow is implemented in **DJ Jump Grid**.
 
 ## Evidence checked on 2026-11-16
 
@@ -45,7 +47,8 @@ The user's BLE report from TP-7 firmware **1.1.11**, normal mode, established:
   The capture has 124 such events; the final position is 54,781 ms.
 - `0x4B` contains track metadata and the current folder/filename. The capture
   reports 48,000 Hz, 7,832,495 sample frames and five tracks. It contains no cue
-  list or BPM field. Numbers in the filename are not treated as metadata.
+  list or BPM field. The DJ grid can explicitly infer a labelled filename BPM,
+  with provenance shown; this is not a device-provided BPM metadata field.
 
 The protocol was additionally checked by static analysis of the
 [TP-7 Android companion application](https://play.google.com/store/apps/details?id=com.teenageengineering.tp7),
@@ -69,9 +72,51 @@ Relevant findings, recorded for reproducibility:
 - The companion command table has no command named for cue enumeration or
   selection. That does not prove no other firmware interface exists.
 
-The **position command has not yet been tested on the user's hardware**. The
-source-derived wire format and simulated acknowledgements must not be presented
-as a hardware-verified cue-navigation implementation.
+In the **2026-11-17 version-2 report**, Stop, Set Position (10,000 ms), and Play
+receive successful replies. The Set Position acknowledgement has empty data;
+actual positions arrive as unsolicited events. The user confirmed entering a
+time and jumping works on TP-7 through Bluetooth / Bluefy. This establishes a
+working time-seek mechanism, not native cue enumeration or sample-accurate audio
+alignment. The reported 7,832,495 frames / 48,000 Hz give an exact duration of
+163.176979166… seconds; the UI displays 2:43.177.
+
+Additional searches of TE's guide/downloads and public source repositories on
+2026-11-17 did not establish a new native cue-list command. The companion table
+and file-event layout above remain the basis for the implementation; no guessed
+opcodes are sent.
+
+## Generated DJ grid arithmetic
+
+For original BPM `n/d`, interval `s/t` quarter-note beats, and zero-based cue index
+`i`, the ideal file position in milliseconds is `i × 60000 × d × s / (n × t)`.
+All terms are BigInt integers. Each cue rounds its own ratio once to the nearest
+millisecond (ties upward), so arithmetic error is at most 0.5 ms at every index,
+including late in a long track. It never repeatedly adds a rounded interval.
+
+The exact file endpoint is `numFrames × 1000 / sampleRate`; both the ideal and
+rounded position must precede it. No button is created at EOF. The grid is lazy,
+with 32 buttons per page, allowing fine subdivisions throughout long tracks
+without creating thousands of DOM nodes. Displayed duration rounding does not
+affect point generation or endpoint checks.
+
+The user supplies original BPM, or the app recognizes an explicit `bpm`/`tempo`
+filename convention. Ambiguous or invalid labels are not guessed. The grid
+assumes constant tempo, quarter-note beats, and a first beat at file time zero.
+Playback speed and target BPM never enter this calculation. It cannot detect
+kick/snare transients, compensate for an inaccurate BPM, or follow tempo changes.
+
+Buttons share the verified Stop → Set Position → Play path and preserve pitch.
+Recording arm and cue recording are disabled first. Connection, track identity
+(folder, name, sample rate, frame count, track count), and configuration revision
+guard pending transmission. A failed or obsolete seek does not send Play.
+Highlighted sections follow actual device position events. A successful command
+acknowledgement alone does not move the position indicator.
+
+This path interrupts playback and has Bluetooth/device latency. Nearest-ms
+position arithmetic is **not** a guarantee of sample accuracy, immediate audible
+response, quantization to a live beat, or phase sync with another deck. No native
+cue markers are changed. Per-track manual BPM and grid settings are stored locally
+for up to 100 tracks; storage failures do not prevent use.
 
 ## Implemented panel
 
@@ -109,12 +154,13 @@ as a hardware-verified cue-navigation implementation.
   raw protocol replies and possibly device identifiers or track information.
   The report is reset when the connection changes.
 
-## Next hardware observation
+## Hardware validation boundaries
 
 On Bluefy: connect TP-7, press **Read TP-7**, then **Start remote session** if
 identification succeeds. The unsupported settings-reader notice on 1.1.11 is
-expected. Test **Jump & play** at a known time (for example 10 seconds), compare
-the device's actual playback position, and copy the report. To investigate native
+expected. Manual **Jump & play** is user-confirmed; generated grids use that same
+operation. Fine audio alignment and live mixing latency still require listening
+on hardware. To investigate native
 cues, select two existing cues using the device's +/− buttons and trigger each
 with **physical Play on TP-7**, not Resume in the web app. Copy the report.
 This can supply evidence about available settings and events without requiring

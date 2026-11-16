@@ -18,6 +18,35 @@
     --font-mono: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Monaco, 'Cascadia Code', 'Consolas', monospace;
 }
 
+/* Generated DJ jumps: bounded pages remain usable on phones and long tracks. */
+.dj-track { overflow-wrap: anywhere; margin-bottom: 16px; font-family: var(--font-mono); font-size: .85rem; }
+.dj-controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.dj-controls label { display: block; font-size: .75rem; margin-bottom: 7px; }
+.dj-controls input, .dj-controls select, #dj-page {
+    width: 100%; min-width: 0; min-height: 44px; padding: 8px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; font: inherit;
+}
+.dj-summary { margin: 14px 0 6px; font-size: .9rem; font-weight: 600; }
+.dj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); gap: 10px; margin-top: 14px; }
+.dj-grid .dj-cue {
+    min-width: 0; min-height: 92px; padding: 10px 6px; display: flex; flex-direction: column;
+    align-items: flex-start; gap: 6px; text-align: left; touch-action: manipulation;
+}
+.dj-cue strong { font-size: 1.25rem; color: var(--accent); }
+.dj-cue span { font-size: .72rem; }
+.dj-cue small { font-family: var(--font-mono); font-size: .75rem; }
+.dj-cue[aria-current="step"] { border-color: var(--accent); background: rgba(255, 107, 53, .12); }
+.dj-paging { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
+.dj-paging[hidden] { display: none; }
+.dj-paging label { display: flex; align-items: center; gap: 6px; font-size: .8rem; }
+#dj-page { width: 70px; }
+@media (max-width: 440px) {
+    .dj-controls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .dj-controls > :first-child { grid-column: 1 / -1; }
+    .dj-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 /* Standardized Info/Warning Boxes */
 .info-box, .warning-box {
     display: flex;

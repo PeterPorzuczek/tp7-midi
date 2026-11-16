@@ -6,7 +6,7 @@ Works on phones, tablets, and computers - right in your browser.
 
 **Live App:** https://peterporzuczek.github.io/tp7-midi/
 
-Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with BPM matching.
+Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with BPM matching and a generated DJ jump grid.
 
 ---
 
@@ -58,17 +58,45 @@ References: [official MIDI reference](https://teenage.engineering/guides/tp-7#mi
 
 ---
 
+## DJ Jump Grid
+
+On Bluefy, connect over Bluetooth, press **Read TP-7**, then **Start remote
+session**. The **DJ Jump Grid** reads the current filename and duration from TP-7.
+Enter the **original track BPM**, choose **Jump every** and **Beats per bar**, then
+tap a generated button to jump and play. Changing grid settings sends no commands.
+The default is every **4 bars**, with **4 beats per bar**. Available intervals run
+from a quarter beat to 32 bars; long grids have pages of 32 buttons.
+
+Explicit filename labels such as `tempo_88`, `bpm_128`, or `127.125bpm` fill in BPM
+automatically. Conflicting labels require manual entry. Numbers such as `cues_15`
+are ignored. Manual BPM and interval settings are remembered separately for each
+track in this browser. This does not change the separate Match BPM inputs.
+
+Prepare tracks with a constant tempo and the first beat at **0:00**. Beats mean
+quarter notes, so choose 4 per bar for 4/4. Use the original BPM even if playback
+speed is changed: the buttons address the original file timeline. This is a
+calculated grid, not audio/drum detection or an import of embedded native cues.
+
+For a 7,832,495-frame, 48 kHz track at 88 BPM, four-bar spacing generates **15
+jumps**, from 0:00.000 through 2:32.727, within a **2:43.177** track. Each position
+is calculated independently with exact integer ratios and rounded once to the
+nearest millisecond (at most 0.5 ms arithmetic error; no accumulated rounding).
+That precision describes the requested file position, not audible device timing.
+Each tap uses the working Stop → Set position → Play sequence. Bluetooth and
+device latency cause a playback interruption; there is no live beat quantization
+or synchronization to another deck. Existing TP-7 cues are not written or erased.
+
 ## Device cue investigation
 
 The **TP-7 Device Access** panel reads device replies over Bluetooth or USB,
-shows the current file, position and playback state, and provides companion
+shows the current file, length, position and playback state, and provides companion
 Resume/Stop and experimental **Jump & play** controls. Jump & play uses a
 millisecond time position. **It does not yet select existing native cues or read
 their count.** Resume does not perform the physical Play button's cue jump.
 The existing Cue Markers grid still addresses MIDI notes.
 
-For Bluefy hardware testing, use **Read TP-7**, then **Start remote session**,
-enter `10` seconds and try **Jump & play**. For native cue investigation,
+The user confirmed manual time jumps work on TP-7 / Bluefy on 2026-11-17.
+For native cue investigation,
 select cues with +/− on TP-7 and press **physical Play on TP-7**. **Copy report** exports
 the received data for analysis without needing a WAV file. See
 [the research and protocol limits](docs/REMOTE_PROTOCOL.md).

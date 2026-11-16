@@ -12,7 +12,7 @@ let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js']);
     server = http.createServer(async (request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         const name = pathname === '/' ? '/index.html' : pathname;
@@ -103,7 +103,7 @@ async function openApp(t, mode = 'usb') {
                                 if (request.data[0] === 81) data = [78, 0];
                                 if (request.data[0] === 76) {
                                     if (window.remoteMode === 'reject-seek') status = 3;
-                                    else data = [77, ...request.data.slice(1)];
+                                    else data = window.emptySeekAck ? [] : [77, ...request.data.slice(1)];
                                 }
                             }
                             const reply = TP7RemoteProtocol.encode(request.id, request.command, data);
@@ -112,6 +112,9 @@ async function openApp(t, mode = 'usb') {
                             for (const fragment of TP7RemoteProtocol.blePackets(reply, 247)) {
                                 characteristic.value = new DataView(fragment.buffer);
                                 for (const fn of notificationListeners) fn({target:characteristic});
+                            }
+                            if (request.command === 127 && request.data[0] === 76 && status === 0 && window.emptySeekAck) {
+                                window.emitCompanion([77, ...request.data.slice(1)]);
                             }
                             if (request.command === 127 && request.data[0] === 64) {
                                 window.emitCompanion([75, 128, 187, 0, 0, 0, 62, 73, 0, 5, 26, 11, 16, 22, 35, 0,
@@ -140,6 +143,13 @@ async function openApp(t, mode = 'usb') {
             frame[6] = 64; frame[7] = 0;
             for (const fragment of TP7RemoteProtocol.blePackets(frame, 247)) window.emitBle(fragment);
         };
+        window.emitTrack = (filename, numFrames = 7832495) => {
+            const bytes = new Uint8Array(8);
+            const view = new DataView(bytes.buffer);
+            view.setUint32(0, 48000, true); view.setUint32(4, numFrames, true);
+            window.emitCompanion([75, ...bytes, 5, 26, 11, 17, 12, 0, 0,
+                ...new TextEncoder().encode(`recordings\0${filename}\0`)]);
+        };
         const device = {
             name: 'TP-7', addEventListener() {},
             gatt: { connected: true, async connect() {
@@ -164,6 +174,111 @@ async function enterTempo(page, source = '120', target = '128') {
     await page.locator('#tempo-source').fill(source);
     await page.locator('#tempo-target').fill(target);
 }
+
+async function startRemote(page) {
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length >= 18 && !window.writeInProgress);
+    await page.locator('#remote-inspect').click();
+    await page.waitForFunction(() => !document.getElementById('remote-session').disabled);
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
+}
+
+test('DJ grid reads duration and filename BPM, then sends the exact selected position without changing speed', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => {
+        window.emitTrack('Multitrack_48k_5stems_tempo_88_cues_15.wav');
+        window.emptySeekAck = true;
+        window.remoteRequests = []; window.bleSent = [];
+    });
+    assert.equal(await page.locator('#dj-bpm').inputValue(), '88');
+    assert.equal(await page.locator('#dj-grid button').count(), 15);
+    assert.match(await page.locator('#dj-summary').innerText(), /2:43.177 · 88 BPM · 15 jumps/);
+    assert.match(await page.locator('#remote-file-info').innerText(), /2:43.177 · 48000 Hz · 5 tracks/);
+    assert.equal(await page.locator('#dj-grid button').last().getAttribute('data-position'), '152727');
+    assert.equal(await page.locator('#tempo-source').inputValue(), '');
+    assert.equal(await page.locator('#cue-count').inputValue(), '8');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests), [], 'building the grid sends nothing');
+    await page.locator('#dj-grid button').nth(1).click();
+    await page.waitForFunction(() => document.getElementById('dj-action-status').dataset.status === 'sent');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81], [76, 157, 42, 0, 0], [80]]);
+    assert.equal(await page.locator('#remote-position').innerText(), '0:10.909');
+    assert.equal(await page.locator('#dj-grid [aria-current="step"]').getAttribute('data-index'), '1');
+    const controls = await page.evaluate(() => window.bleSent.filter(packet => !packet.includes(0xF0)).map(packet => [packet.slice(2, 5), packet.slice(6, 9)]));
+    assert.deepEqual(controls, [[[0xB0, 14, 0], [0xB0, 16, 0]]], 'no pitch, rocker or record-on commands');
+});
+
+test('DJ grid pages reach the end, fit mobile screens and preserve settings for each exact track', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.locator('#dj-bpm').fill('127,125');
+    await page.locator('#dj-interval').selectOption('beat-quarter');
+    await page.locator('#dj-meter').selectOption('3');
+    const expected = require('../dj-cues.js').createGrid({ bpm: '127.125', interval: 'beat-quarter', beatsPerBar: 3, sampleRate: 48000, numFrames: 4800000 });
+    assert.equal(await page.locator('#dj-grid button').count(), 32);
+    await page.locator('#dj-page').fill(String(Math.ceil(expected.count / 32)));
+    await page.locator('#dj-page').press('Enter');
+    await page.locator('#dj-bpm').focus();
+    assert.equal(await page.locator('#dj-grid button').last().getAttribute('data-position'), String(expected.pointAt(expected.count - 1).positionMs));
+    assert.equal(await page.locator('#dj-next').isDisabled(), true);
+    await page.locator('#dj-prev').click();
+    assert.equal(await page.locator('#dj-grid button').count(), 32);
+    // A different file, even with identical length, gets its own BPM.
+    await page.evaluate(() => window.emitTrack('other.wav', 4800000));
+    assert.equal(await page.locator('#dj-bpm').inputValue(), '');
+    assert.equal(await page.locator('#dj-grid button').count(), 0);
+    await page.locator('#dj-bpm').fill('95');
+    await page.evaluate(() => window.emitTrack('example_cues_15_tempo_88.wav', 4800000));
+    assert.equal(await page.locator('#dj-bpm').inputValue(), '127,125');
+    assert.equal(await page.locator('#dj-meter').inputValue(), '3');
+    assert.equal(await page.locator('#dj-interval').inputValue(), 'beat-quarter');
+    // A reload keeps manual settings and still requires a new device session.
+    await page.reload();
+    assert.equal(await page.locator('#dj-grid button').count(), 0);
+    await startRemote(page);
+    assert.equal(await page.locator('#dj-bpm').inputValue(), '127,125');
+    await page.locator('#dj-interval').selectOption('bar-4');
+    for (const width of [320, 375, 768, 1280]) {
+        await page.setViewportSize({ width, height: 1000 });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
+        assert.ok((await page.locator('#dj-grid button').first().boundingBox()).height >= 44);
+    }
+    if (process.env.TP7_SCREENSHOT_DIR) {
+        await page.evaluate(() => window.emitTrack('Multitrack_48k_5stems_tempo_88_cues_15.wav'));
+        await page.locator('#section-dj').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'dj-desktop.png') });
+        await page.setViewportSize({ width: 375, height: 1100 });
+        await page.locator('#section-dj').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'dj-mobile.png') });
+    }
+    await page.evaluate(() => { bleDevice.gatt.connected = false; onBLEDisconnected(); });
+    assert.equal(await page.locator('#dj-grid button').count(), 0);
+    assert.equal(await page.locator('#dj-bpm').isDisabled(), true);
+});
+
+test('DJ changes cancel queued jumps; file changes and rejected seeks never resume', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => { window.remoteRequests = []; window.holdWrite = true; });
+    await page.locator('#cue-rec-off').click();
+    await page.waitForFunction(() => window.releaseWrite !== null);
+    await page.locator('#dj-grid button').nth(1).click();
+    await page.locator('#dj-bpm').fill('90');
+    await page.evaluate(async () => { window.releaseWrite(); await bleWriteQueue; });
+    await page.waitForFunction(() => !window.tp7RemotePanel.getState().busy);
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests), []);
+    await page.evaluate(() => { window.changeFileOnStop = true; });
+    await page.locator('#dj-grid button').nth(1).click();
+    await page.waitForFunction(() => !window.tp7RemotePanel.getState().busy);
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81]]);
+    assert.equal(await page.locator('#dj-grid button').count(), 0);
+    await page.locator('#dj-bpm').fill('120');
+    await page.evaluate(() => { window.remoteRequests = []; window.remoteMode = 'reject-seek'; });
+    await page.locator('#dj-grid button').nth(1).click();
+    await page.waitForFunction(() => document.getElementById('dj-action-status').dataset.status === 'error');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81], [76, 64, 31, 0, 0]]);
+    assert.equal(await page.locator('#remote-playback').innerText(), 'Stopped');
+});
 
 test('USB Apply sends the optimum pitch once, is idempotent and survives reload', async t => {
     const page = await openApp(t);
