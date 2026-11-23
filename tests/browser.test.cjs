@@ -342,6 +342,47 @@ test('legacy companion paths remain available; endpoint and empty marker lists c
     assert.equal(await page.locator('#remote-play').isDisabled(), false);
 });
 
+test('natural completion with an omitted tail reports truncation; padded txt helper validates all cues', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    const source = { filename: 'example_cues_15_tempo_88.wav', sampleRate: 48000, numFrames: 4800000,
+        kind: 'wav', bpm: 95, cues: Array.from({ length: 17 }, (_, i) => i * 200001) };
+    const padded = cueCarrier.makeWave(source, 'txt');
+    const legacySamples = 14400 + (22 + cueCarrier.payload(source).length) * 960;
+    const old = padded.bytes.slice(0, 44 + legacySamples * 2);
+    new DataView(old.buffer).setUint32(4, old.length - 8, true);
+    new DataView(old.buffer).setUint32(40, old.length - 44, true);
+    const blocks = carrierAudio.encode(carrierAudio.resample(old), 4000).filter(b => b.length === 2003).slice(0, -1).map(b => [...b]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; }, blocks);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').textContent.includes('Regenerate'));
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).companionAccess?.stage === 'done');
+    const report = JSON.parse(await page.locator('#remote-report').textContent());
+    assert.equal(report.version, 6);
+    assert.equal(report.companionAccess.audioComplete, true);
+    assert.ok(report.companionAccess.decoder.missingSamples > 0);
+    assert.ok(report.companionAccess.decoder.requiredSamples > report.companionAccess.decoder.receivedSamples);
+    assert.deepEqual(report.companionAccess.cleanupErrors, []);
+    await page.locator('#carrier-format').selectOption('txt');
+    await page.waitForFunction(() => !document.getElementById('carrier-test').disabled);
+    await page.locator('#section-carrier summary').click();
+    await page.locator('#carrier-test').click();
+    const downloadEvent = page.waitForEvent('download');
+    await page.locator('#carrier-download').click();
+    assert.equal((await downloadEvent).suggestedFilename(), 'example_cues_15_tempo_88.txt');
+    const complete = carrierAudio.encode(carrierAudio.resample(padded.bytes), 4000).filter(b => b.length === 2003).slice(0, -1).map(b => [...b]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; window.companionRequests = []; }, complete);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 17);
+    assert.match(await page.locator('#carrier-source').innerText(), /17 points.*95/);
+    const request = await page.evaluate(() => window.companionRequests.find(r => r.data[0] === 67).data);
+    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.txt\0')]);
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.TP7_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'padded-carrier-mobile.png'), fullPage: true });
+});
+
 test('carrier rejects a valid payload for a different track and cancellation restores the session', async t => {
     const page = await openApp(t, 'ble');
     await startRemote(page);

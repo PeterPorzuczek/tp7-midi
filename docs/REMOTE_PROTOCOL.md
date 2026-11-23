@@ -109,9 +109,18 @@ from the app is executed or distributed with this project.
 ### On-disk audio and payload
 
 The helper name replaces `.wav` with `.cue`, in the source track's folder. A
-selector retains the hardware-confirmed `.tp7-cues.wav` fallback; the bytes are
-identical. `.cue` extension handling still requires a device test.
-It is mono PCM, 48 kHz, signed 16-bit, 150 ms leading/trailing silence. Bits are
+selector retains the hardware-confirmed `.tp7-cues.wav` fallback and adds an
+experimental `.txt` extension test; the bytes are identical encoded audio, not text.
+A later 1.1.11 report accepted `.cue`, transferred 22,033 ADPCM bytes in 11 blocks
+(44,000 decoded samples), and signaled natural completion. The corresponding old
+helper was 2.94 seconds long. Dropping its partial 4000-sample tail reproduces the
+exact truncation failure, consistent with the firmware omitting a partial block.
+This is an inference from the report and local reproduction, not firmware source.
+New generators keep 150 ms leading silence, add at least one second of trailing
+silence, and round total duration up to a 250 ms block boundary. Payload v1 is
+unchanged; old complete helpers still decode. Device validation of the padded
+helper and `.txt` extension remains outstanding.
+The file is mono PCM, 48 kHz, signed 16-bit. Bits are
 MSB first, 400 baud, using 1200 Hz for zero and 2400 Hz for one (3/6 cycles per
 120-sample symbol). At the companion's 16 kHz output each symbol is 40 samples.
 An eight-byte `55` training sequence precedes sync `D3 91 6B C5 A7 2E 84 F0`,
@@ -159,6 +168,12 @@ not occurred. After clean teardown it reopens the ordinary remote session withou
 resuming playback. Cleanup failure suppresses cue buttons and asks for reconnect.
 Cancellation and source-track/connection changes invalidate the operation. The
 report contains decoded marker metadata and counts, never audio blocks/samples.
+
+Report version 6 adds received sample count/duration, the detected sync end,
+payload byte length, required sample count and missing sample count on truncation.
+No missing bits or cue offsets are guessed. CRC and track identity remain mandatory.
+After a rename, regenerate from the WAV under its final filename; changing a helper's
+filesystem name cannot update the filename stored in its payload.
 
 Tests cover fixed codec vectors (header endian, nibble order, saturation), local
 WAV metadata reads without audio, all 40 symbol phases under resampling/ADPCM/noise,

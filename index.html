@@ -139,9 +139,10 @@
                 <label for="carrier-format">Companion file name</label>
                 <select id="carrier-format">
                     <option value="cue">track.cue</option>
+                    <option value="txt">track.txt (extension test)</option>
                     <option value="legacy-wav">track.tp7-cues.wav — older exports</option>
                 </select>
-                <p class="remote-help">Read prepared points from a companion file stored next to the original track on TP-7. Keep the original track selected. The Windows WAV Editor can export both files together. The .cue file contains our audio carrier, not a text CUE sheet. Opening .cue and hiding it from the track list still need a device test. Reading .tp7-cues.wav has been confirmed on hardware.</p>
+                <p class="remote-help">Read prepared points from a companion file next to the original track on TP-7. Keep the original track selected. Regenerate older companions here or in WAV Editor 1.3.1+ to add the padded ending needed for complete transfers. Keep the WAV's final filename when preparing. The .cue, experimental .txt and older .tp7-cues.wav options contain the same encoded audio; .txt tests the extension, not plain-text transfer.</p>
                 <div class="remote-actions">
                     <button id="carrier-read" class="primary" disabled>Read cue carrier</button>
                     <button id="carrier-cancel" disabled>Cancel</button>

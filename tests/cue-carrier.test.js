@@ -42,6 +42,49 @@ test('maximum list and UTF-8 filename preserve sample offsets without cumulative
     assert.equal(decoded.cues[255].positionMs, Math.round(full.cues[255] * 1000 / 44100));
 });
 
+test('reproduces a completed transfer of 11 full 4000-sample blocks truncating an old 17-cue helper', () => {
+    const recording = { ...source, filename: 'fixture-000001.wav', cues: Array.from({ length: 17 }, (_, i) => i * 900001) };
+    const padded = carrier.makeWave(recording).bytes;
+    const legacySamples = 14400 + (22 + carrier.payload(recording).length) * 8 * 120;
+    const legacy = padded.slice(0, 44 + legacySamples * 2);
+    const header = new DataView(legacy.buffer);
+    header.setUint32(4, legacy.length - 8, true); header.setUint32(40, legacy.length - 44, true);
+    assert.equal(legacy.length, 282284);
+    // The device reports completion after 11 complete blocks, omitting the partial tail.
+    const blocks = encode(resample(legacy), 4000).filter(b => b.length === 2003);
+    assert.equal(blocks.length, 11);
+    assert.equal(blocks.reduce((sum, b) => sum + b.length, 0), 22033);
+    const diagnostics = {};
+    assert.throws(() => carrier.decode(collect(blocks), recording, diagnostics), /Truncated.*Regenerate/);
+    assert.equal(diagnostics.receivedSamples, 44000);
+    assert.ok(diagnostics.missingSamples > 0);
+    assert.equal(diagnostics.payloadBytes, 110);
+    assert.equal(carrier.decode(collect(encode(resample(legacy), 4000)), recording).cues.length, 17);
+});
+
+test('padded carriers survive partial-tail loss and a further missing 250 ms block', () => {
+    for (const [filename, count] of [['track.wav', 0], ['track.wav', 3], ['fixture-000001.wav', 17], ['x'.repeat(251) + '.wav', 256]]) {
+        const recording = { ...source, filename, cues: Array.from({ length: count }, (_, i) => i * 62001) };
+        const wave = carrier.makeWave(recording);
+        assert.equal(((wave.bytes.length - 44) / 2) % 12000, 0);
+        for (const phase of [0, 17, 39]) {
+            const blocks = encode(resample(wave.bytes, phase, 600), 4000).filter(b => b.length === 2003).slice(0, -1);
+            const decoded = carrier.decode(collect(blocks), recording);
+            assert.deepEqual(decoded.cues.map(c => c.sampleOffset), recording.cues);
+            assert.equal(decoded.bpm, recording.bpm);
+        }
+    }
+});
+
+test('txt is an explicit filename experiment with identical encoded audio and strict track identity', () => {
+    const cue = carrier.makeWave(source), txt = carrier.makeWave(source, 'txt');
+    assert.equal(txt.filename, 'prepared_128bpm.txt');
+    assert.deepEqual(txt.bytes, cue.bytes);
+    const pcm = resample(txt.bytes);
+    assert.equal(carrier.decode(pcm, source).filename, source.filename);
+    assert.throws(() => carrier.decode(pcm, { ...source, filename: 'renamed.wav' }), /stored: prepared_128bpm.wav.*selected: renamed.wav.*Regenerate/);
+});
+
 test('empty cue lists clear old markers and endpoint markers are preserved without a seek', () => {
     const empty = { ...source, cues: [], bpm: 0.5 };
     assert.deepEqual(carrier.decode(collect(encode(resample(carrier.makeWave(empty).bytes))), empty).cues, []);

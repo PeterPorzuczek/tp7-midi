@@ -19,8 +19,8 @@ const TP7CueCarrier = (() => {
     }
     function helperName(filename, format = 'cue') {
         if (typeof filename !== 'string' || !/\.wav$/i.test(filename) || /[\0/\\]/.test(filename)) throw new Error('Expected a WAV filename without a path.');
-        if (!['cue', 'legacy-wav'].includes(format)) throw new Error('Unknown cue helper format.');
-        const name = filename.slice(0, -4) + (format === 'cue' ? '.cue' : '.tp7-cues.wav');
+        if (!['cue', 'txt', 'legacy-wav'].includes(format)) throw new Error('Unknown cue helper format.');
+        const name = filename.slice(0, -4) + (format === 'legacy-wav' ? '.tp7-cues.wav' : `.${format}`);
         if (encoder.encode(name).length > 255) throw new Error('The filename is too long for a cue carrier.');
         return name;
     }
@@ -31,7 +31,7 @@ const TP7CueCarrier = (() => {
         if (!Array.isArray(source.cues) || source.cues.length > MAX_CUES) throw new Error(`A carrier supports 0–${MAX_CUES} cues.`);
         if (source.bpm !== null && (!Number.isFinite(source.bpm) || source.bpm <= 0 || source.bpm > 1000)) throw new Error('Invalid stored BPM.');
         if (expected && (source.filename !== expected.filename || source.sampleRate !== expected.sampleRate || source.numFrames !== expected.numFrames)) {
-            throw new Error('Cue carrier belongs to a different track (name, sample rate or length mismatch).');
+            throw new Error(`Cue carrier belongs to a different track (stored: ${source.filename}, ${source.sampleRate} Hz, ${source.numFrames} frames; selected: ${expected.filename}, ${expected.sampleRate} Hz, ${expected.numFrames} frames). Regenerate the companion after renaming or replacing the WAV.`);
         }
         let previous = -1;
         const cues = source.cues.map(value => {
@@ -80,15 +80,19 @@ const TP7CueCarrier = (() => {
         return bytes;
     }
     function makeWave(source, format = 'cue') {
-        const bytes = frame(source), sampleRate = 48000, samplesPerBit = 120, silence = 7200;
-        const samples = silence * 2 + bytes.length * 8 * samplesPerBit;
+        const bytes = frame(source), sampleRate = 48000, samplesPerBit = 120, leading = 7200;
+        // Hardware can report natural completion after full 4000-sample/16 kHz blocks,
+        // omitting the partial tail. Keep at least one second after the CRC and align
+        // the WAV to 250 ms blocks; the v1 payload and leading timing stay unchanged.
+        const blockFrames = 12000;
+        const samples = Math.ceil((leading + bytes.length * 8 * samplesPerBit + sampleRate) / blockFrames) * blockFrames;
         const output = new Uint8Array(44 + samples * 2), data = view(output);
         const text = (offset, text) => output.set(encoder.encode(text), offset);
         text(0, 'RIFF'); data.setUint32(4, output.length - 8, true); text(8, 'WAVEfmt ');
         data.setUint32(16, 16, true); data.setUint16(20, 1, true); data.setUint16(22, 1, true);
         data.setUint32(24, sampleRate, true); data.setUint32(28, sampleRate * 2, true); data.setUint16(32, 2, true); data.setUint16(34, 16, true);
         text(36, 'data'); data.setUint32(40, samples * 2, true);
-        let at = silence;
+        let at = leading;
         for (const byte of bytes) for (let bit = 7; bit >= 0; bit--) {
             const cycles = byte & (1 << bit) ? 6 : 3;
             for (let i = 0; i < samplesPerBit; i++) data.setInt16(44 + (at++) * 2, Math.round(18000 * Math.sin(2 * Math.PI * cycles * i / samplesPerBit)), true);
@@ -157,7 +161,8 @@ const TP7CueCarrier = (() => {
         const sum = powers[0] + powers[1];
         return { bit: powers[1] > powers[0] ? 1 : 0, confidence: sum ? Math.abs(powers[1] - powers[0]) / sum : 0 };
     }
-    function decode(samples, expected) {
+    function decode(samples, expected, diagnostics = {}) {
+        Object.assign(diagnostics, { sampleRate: 16000, receivedSamples: samples.length, receivedSeconds: samples.length / 16000 });
         if (samples.length < 8000 || samples.length > 16000 * 40) throw new Error('Cue carrier audio is too short or too long.');
         const syncBits = [...new Array(4).fill(0x55), ...SYNC].flatMap(byte => Array.from({ length: 8 }, (_, bit) => (byte >> (7 - bit)) & 1));
         let best = null;
@@ -177,6 +182,7 @@ const TP7CueCarrier = (() => {
         }
         if (!best) throw new Error('No cue carrier signal found. Check that the helper WAV was copied without editing.');
         let at = best.at;
+        diagnostics.syncEndSample = at;
         function byte() {
             if (at + 8 * SYMBOL > samples.length) throw new Error('Truncated cue carrier audio.');
             let value = 0;
@@ -189,6 +195,11 @@ const TP7CueCarrier = (() => {
         }
         const low = byte(), high = byte(), length = low + high * 256;
         if (length < 28 || length > MAX_PAYLOAD) throw new Error('Invalid decoded cue carrier size.');
+        Object.assign(diagnostics, { payloadBytes: length, requiredSamples: at + (length + 4) * 8 * SYMBOL });
+        diagnostics.missingSamples = Math.max(0, diagnostics.requiredSamples - samples.length);
+        if (diagnostics.missingSamples) {
+            throw new Error(`Truncated cue carrier audio: received ${samples.length} samples, need ${diagnostics.requiredSamples} (${Math.ceil(diagnostics.missingSamples / 16)} ms missing). Regenerate the companion with this app or WAV Editor 1.3.1+ and copy it again; the new file includes a padded ending.`);
+        }
         const protectedBytes = Uint8Array.from([low, high, ...Array.from({ length }, byte)]);
         const checksum = Uint8Array.from(Array.from({ length: 4 }, byte));
         if (crc32(protectedBytes) !== view(checksum).getUint32(0, true)) throw new Error('Cue carrier checksum failed; no markers accepted.');

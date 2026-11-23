@@ -192,13 +192,14 @@ const TP7CompanionBLE = (() => {
     }
     function readCarrier(options, codec) {
         const collector = new codec.Collector();
+        const diagnostics = {};
         return probe({ ...options, carrier: {
             filename: codec.helperName(options.file.filename, options.helperFormat || 'cue'),
             push: (type, bytes) => collector.push(type, bytes),
-            stats: () => ({ decodedSamples: collector.sampleCount, decodedBlocks: collector.blocks, pendingBlockBytes: collector.blockSize }),
+            stats: () => ({ decodedSamples: collector.sampleCount, decodedBlocks: collector.blocks, pendingBlockBytes: collector.blockSize, ...diagnostics }),
             finish: expected => {
                 const samples = collector.finish();
-                return { ...codec.decode(samples, expected), decodedSamples: samples.length, decodedBlocks: collector.blocks };
+                return { ...codec.decode(samples, expected, diagnostics), decodedSamples: samples.length, decodedBlocks: collector.blocks };
             },
         } });
     }

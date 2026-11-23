@@ -89,15 +89,19 @@ or synchronization to another deck. Existing TP-7 cues are not written or erased
 ## Prepared Cue Carrier
 
 The user confirmed receiving three cue points from a separate `.tp7-cues.wav`
-file over Bluetooth in Bluefy on TP-7 1.1.11. The new `.cue` filename option uses
-the identical audio carrier. **Opening that extension and hiding it from TP-7's
-track list still need a hardware test.** This does not read the native marker
+file over Bluetooth in Bluefy on TP-7 1.1.11. A later report accepted `.cue` and
+received audio but stopped after 11 complete 4000-sample blocks (2.75 seconds),
+truncating a 2.94-second helper. This exact failure is reproduced in the tests.
+New helpers include at least one second of trailing silence and align to 250 ms
+blocks so the cue data and CRC precede the potentially omitted tail. **The padded
+helper still needs device validation; hiding it from TP-7's track list is not confirmed.**
+This does not read the native marker
 table or change the recorder's native CUE selection.
 
 Prepare once, when loading music onto TP-7:
 
 1. In [TP-7 WAV Editor for Windows](https://github.com/PeterPorzuczek/tp7-wav-editor-win),
-   leave **Export matching .cue companion** checked. Export writes `track.wav`
+   use version **1.3.1 or newer**, and leave **Export matching .cue companion** checked. Export writes `track.wav`
    and `track.cue` from the same snapshot, including multitrack exports. Alternatively,
    use **Prepare a cue companion once → Prepare from WAV cues** here and choose
    **Save companion file**. This reads headers/markers locally, skipping audio.
@@ -106,6 +110,10 @@ Prepare once, when loading music onto TP-7:
    the companion to `track.tp7-cues.wav` and select **older exports** here. That
    fallback works on hardware but appears as another audio track. Keep the original
    WAV filename and companion audio unchanged. The web app does not upload files.
+   An experimental **track.txt (extension test)** option prepares and reads the
+   same audio under `.txt`; it does not implement plain-text Bluetooth transfer.
+   Use the final WAV filename before preparation: renaming both exported files
+   does not update the filename embedded inside the companion.
 3. In Bluefy, select **the original music track** on TP-7, connect, **Read TP-7 →
    Start remote session → Read cue carrier**. The app requests the helper by name,
    checks its signal, CRC and source identity, then shows cue buttons. Playback is

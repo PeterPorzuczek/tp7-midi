@@ -4,7 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 5, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
+    const report = { version: 6, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
         live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);

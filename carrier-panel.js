@@ -81,7 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function prepare(source) {
         prepared = codec.makeWave(source, el('carrier-format').value);
-        el('carrier-preparation').textContent = `${prepared.filename} · ${prepared.cueCount} ${source.kind === 'test' ? 'TEST points (0 / 10 / 20 s when inside the track)' : 'original WAV markers'} · ${prepared.seconds.toFixed(2)} s · ${Math.ceil(prepared.bytes.length / 1024)} KiB. Save and copy it next to ${source.filename} on TP-7. Select the original track when reading cues.`;
+        el('carrier-preparation').textContent = `${prepared.filename} · ${prepared.cueCount} ${source.kind === 'test' ? 'TEST points (0 / 10 / 20 s when inside the track)' : 'original WAV markers'} · ${prepared.seconds.toFixed(2)} s with padded ending · ${Math.ceil(prepared.bytes.length / 1024)} KiB. Save and copy it next to ${source.filename} on TP-7. Renaming the WAV requires preparing a new companion. Select the original track when reading cues.`;
     }
     el('carrier-test').addEventListener('click', () => {
         prepared = null;
