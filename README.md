@@ -86,7 +86,47 @@ Each tap uses the working Stop → Set position → Play sequence. Bluetooth and
 device latency cause a playback interruption; there is no live beat quantization
 or synchronization to another deck. Existing TP-7 cues are not written or erased.
 
-## Companion Bluetooth audio investigation
+## Prepared Cue Carrier
+
+The companion Bluetooth channel was confirmed on the user's TP-7 1.1.11 in
+Bluefy: 4237 audio bytes received, followed by acknowledged abort, transfer exit
+and session close. **Prepared Cue Carrier** builds on this channel. Its complete
+generator → device transfer → decoder workflow still needs a hardware test.
+
+Prepare once, when loading music onto TP-7:
+
+1. In **Prepare a helper WAV once**, choose **Prepare from WAV cues** and select
+   the original prepared WAV. Only its headers/markers are read locally; audio
+   bytes are skipped. Up to 256 existing markers and stored ACID BPM are supported.
+2. **Save helper WAV**, then copy `track.tp7-cues.wav` next to `track.wav` on TP-7
+   using the same file-transfer method you use for music. Keep the helper's exact
+   name and audio unchanged. The web app does not upload files to TP-7.
+3. In Bluefy, select **the original music track** on TP-7, connect, **Read TP-7 →
+   Start remote session → Read cue carrier**. The app requests the helper by name,
+   checks its signal, CRC and source identity, then shows cue buttons. Playback is
+   stopped during reading; the remote session is restored automatically after
+   acknowledged cleanup. Tapping a cue uses the existing Stop → Seek → Play path.
+
+For a first hardware test without the original WAV on hand, **Prepare 0 / 10 / 20 s
+test** creates a helper for the currently observed track. These are explicitly
+labelled TEST points, not recovered native markers. Save/copy/read it as above.
+
+Sample offsets are preserved as uint32 values and rounded once with integer
+arithmetic to the nearest millisecond for the device's seek command. No rhythm
+analysis or repeated interval rounding is used. Track matching checks filename,
+sample rate and frame count; regenerate a helper after changing the original
+audio or markers. It is not an audio-content fingerprint. The carrier is a
+separate PCM WAV containing FSK data that can survive the companion's ADPCM
+conversion. It is not an ordinary text `.cue` sidecar, and the original WAV's
+metadata is not being fetched over Bluetooth.
+
+Transfer is bounded to 512 KiB compressed data and 40 seconds. Invalid, truncated,
+corrupted or mismatched data produces no cue buttons. Audio stays in browser
+memory for decoding and is omitted from reports. The report includes the checked
+marker list, decoder counts and cleanup outcome. Cue buttons are cleared when
+the track/connection changes. Bluetooth and device latency still apply to jumps.
+
+## Companion Bluetooth audio diagnostic
 
 The 23 November 2026 hardware report rejected generic FILE command 5 twice
 with status 2 (command not found). Retrying that test does not enable cue access.
@@ -103,9 +143,8 @@ disconnect and reconnect before continuing. Cancel also attempts this cleanup.
 The report contains stages, request results and byte counts, not the audio.
 **Audio reception is not native cue extraction.** The companion transcodes audio
 to ADPCM / 16 kHz mono and reconstructs a WAV, losing original RIFF metadata. A
-possible later workaround is a separately prepared WAV carrying cue data as audio,
-but that carrier and its decoding have not been implemented or hardware-verified.
-The current test establishes whether Bluefy can access this channel on the device.
+prepared WAV carrier now supplies an alternative described above. The short
+diagnostic remains available separately; it does not read markers.
 
 ## Earlier generic FILE experiment
 

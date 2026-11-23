@@ -46,12 +46,13 @@ const TP7CompanionBLE = (() => {
         }
     }
 
-    async function probe({ device, file, protocol, check, signal, update }) {
+    async function probe({ device, file, protocol, check, signal, update, carrier = null }) {
         const summary = { method: 'TP-7 companion GATT', service: SERVICE, characteristic: CHARACTERISTIC,
             stage: 'service', result: 'testing', audioBytes: 0, firstPackets: 0, continuationPackets: 0,
-            events: [], nativeCuesRead: false };
+            events: [], nativeCuesRead: false, mode: carrier ? 'cue-carrier' : 'audio-probe',
+            targetFilename: carrier ? carrier.filename : file.filename };
         let endpoint, nextId = 0, waiting = null, sessionAttempted = false, transferAttempted = false;
-        let receiving = false, streamResolve, streamReject, streamTimer, active = false, failure = null;
+        let receiving = false, streamResolve, streamReject, streamTimer, active = false, failure = null, audioComplete = false;
         let queue = Promise.resolve();
         const log = (kind, value = {}) => { summary.events.push({ kind, ...value }); if (summary.events.length > 40) summary.events.shift(); update(summary); };
         const guard = () => { check(); if (signal?.aborted) throw new Error('Companion test cancelled.'); if (failure) throw failure; };
@@ -63,10 +64,12 @@ const TP7CompanionBLE = (() => {
             if (data?.length) {
                 if (data[0] === 0x45 && data.length === 2) active = data[1] === 1;
                 if (data[0] === 0x49 && data.length === 2 && receiving) {
-                    if (data[1] === 0) streamResolve();
+                    if (data[1] === 0) { audioComplete = true; streamResolve(); }
                     else streamReject(new Error(`Audio transfer ended with reason ${data[1]}.`));
                 }
                 const track = protocol.companionEvent(data);
+                if (track?.type === 'file') log('track', { filename: track.filename, folder: track.folder,
+                    sampleRate: track.sampleRate, numFrames: track.numFrames, numTracks: track.numTracks });
                 if (track?.type === 'file' && [track.folder, track.filename, track.sampleRate, track.numFrames, track.numTracks].join('\0') !==
                     [file.folder, file.filename, file.sampleRate, file.numFrames, file.numTracks].join('\0')) {
                     fail(new Error('Track changed during companion test.'));
@@ -87,10 +90,12 @@ const TP7CompanionBLE = (() => {
                 summary.continuationPackets++;
             }
             summary.audioBytes += bytes.length;
-            if (summary.audioBytes > 65536) throw new Error('Companion audio exceeded the 64 KiB receive limit.');
+            if (summary.audioBytes > (carrier ? 524288 : 65536)) throw new Error('Companion audio exceeded the receive limit.');
+            carrier?.push(type, bytes);
             update(summary);
-            // Prove receipt, then abort. No complete song or audio content is retained.
-            if (summary.audioBytes >= 4096) streamResolve();
+            // The diagnostic counts bytes then aborts; the carrier reader waits
+            // for completion and temporarily retains only the helper audio.
+            if (!carrier && summary.audioBytes >= 4096) streamResolve();
         });
         const onNotification = event => {
             if (event.target !== endpoint) return;
@@ -140,8 +145,8 @@ const TP7CompanionBLE = (() => {
             await request(127, [0x40]);
             await request(127, [0x51]);
             summary.stage = 'enter-transfer'; transferAttempted = true; update(summary);
-            for (const name of [file.folder, file.filename]) if (!name || name.includes('\0') || new TextEncoder().encode(name).length > 255) throw new Error('Invalid current track path.');
-            await request(127, [0x43, 0, ...new TextEncoder().encode(file.folder), 0, ...new TextEncoder().encode(file.filename), 0]);
+            for (const name of [file.folder, summary.targetFilename]) if (!name || name.includes('\0') || new TextEncoder().encode(name).length > 255) throw new Error('Invalid current track path.');
+            await request(127, [0x43, 0, ...new TextEncoder().encode(file.folder), 0, ...new TextEncoder().encode(summary.targetFilename), 0]);
             // The app waits for FILE_TRANSFER_ACTIVE. An OK alone is insufficient.
             const deadline = Date.now() + 3000;
             while (!active) {
@@ -152,22 +157,29 @@ const TP7CompanionBLE = (() => {
             const stream = new Promise((resolve, reject) => { streamResolve = resolve; streamReject = reject; });
             // Attach immediately: a notification can reject before the request ACK.
             stream.catch(() => {});
-            streamTimer = setTimeout(() => streamReject(new Error('No complete audio sample within 8 seconds.')), 8000);
-            // The companion uses (0, 0) for a whole track. We abort after 4 KiB;
-            // offset/duration units are not guessed for a partial-file request.
+            streamTimer = setTimeout(() => streamReject(new Error(carrier ? 'Cue carrier transfer timed out after 40 seconds.' : 'No complete audio sample within 8 seconds.')), carrier ? 40000 : 8000);
+            // The companion uses (0, 0) for a whole track. Only the diagnostic
+            // aborts after 4 KiB; nonzero offset/duration units are not guessed.
             await request(127, [0x46, 0, 0, 0, 0, 0, 0, 0, 0]);
             await stream; guard();
             if (!summary.audioBytes || !summary.firstPackets) throw new Error('Audio transfer ended without data.');
-            summary.result = 'audio-received';
+            if (carrier) {
+                summary.stage = 'decode'; update(summary);
+                await new Promise(resolve => setTimeout(resolve, 0)); guard();
+                summary.carrier = carrier.finish(file); guard();
+                summary.result = 'cues-decoded';
+            } else summary.result = 'audio-received';
         } catch (error) {
             summary.result = signal?.aborted ? 'cancelled' : 'failed'; summary.error = error.message;
         } finally {
             receiving = false; clearTimeout(streamTimer); clearInterval(guardTimer);
             signal?.removeEventListener('abort', onAbort);
             summary.lastStage = summary.stage; summary.stage = 'cleanup'; update(summary);
+            summary.audioComplete = audioComplete;
+            if (carrier) summary.decoder = carrier.stats();
             summary.cleanupErrors = [];
             if (endpoint && device.gatt.connected) {
-                for (const opcode of [...(transferAttempted ? [0x48, 0x44] : []), ...(sessionAttempted ? [0x41] : [])]) {
+                for (const opcode of [...(transferAttempted ? (audioComplete ? [0x44] : [0x48, 0x44]) : []), ...(sessionAttempted ? [0x41] : [])]) {
                     try { await request(127, [opcode], true); }
                     catch (error) { summary.cleanupErrors.push(error.message); }
                 }
@@ -178,6 +190,18 @@ const TP7CompanionBLE = (() => {
         }
         return summary;
     }
-    return { SERVICE, CHARACTERISTIC, packets, Receiver, probe };
+    function readCarrier(options, codec) {
+        const collector = new codec.Collector();
+        return probe({ ...options, carrier: {
+            filename: codec.helperName(options.file.filename),
+            push: (type, bytes) => collector.push(type, bytes),
+            stats: () => ({ decodedSamples: collector.sampleCount, decodedBlocks: collector.blocks, pendingBlockBytes: collector.blockSize }),
+            finish: expected => {
+                const samples = collector.finish();
+                return { ...codec.decode(samples, expected), decodedSamples: samples.length, decodedBlocks: collector.blocks };
+            },
+        } });
+    }
+    return { SERVICE, CHARACTERISTIC, packets, Receiver, probe, readCarrier };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = TP7CompanionBLE;

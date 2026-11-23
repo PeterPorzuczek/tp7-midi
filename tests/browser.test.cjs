@@ -6,13 +6,15 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { chromium } = require('playwright');
+const cueCarrier = require('../cue-carrier.js');
+const carrierAudio = require('./helpers/carrier-audio.cjs');
 
 let browser;
 let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/file-access.js', '/file-panel.js', '/companion-ble.js', '/companion-panel.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/file-access.js', '/file-panel.js', '/companion-ble.js', '/companion-panel.js', '/cue-carrier.js', '/carrier-panel.js']);
     server = http.createServer(async (request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         const name = pathname === '/' ? '/index.html' : pathname;
@@ -230,10 +232,18 @@ async function openApp(t, mode = 'usb') {
                     const data = request.command === 1 ? [...new TextEncoder().encode('product:TP-7;sw_version:1.1.11;')] : [];
                     if (request.data[0] === 67) companionEvent([69, 1]);
                     const response = TP7RemoteProtocol.encode(request.id, request.command, data); response[6] &= ~64; response.splice(9, 0, 0);
+                    if (window.companionMode === 'cleanup-fail' && request.data[0] === 68) response[9] = 2;
                     for (const p of TP7CompanionBLE.packets(response)) companionEmit(p);
                     if (request.data[0] === 70 && window.companionMode !== 'silent') {
-                        companionEmit(Uint8Array.from([2, 0, 0, 0, 0, 1, 0, 0, 0]));
-                        companionEmit(Uint8Array.from([3, ...new Uint8Array(16)]));
+                        if (window.carrierBlocks) {
+                            for (const block of window.carrierBlocks) {
+                                companionEmit(Uint8Array.from([2, 0, 0, 0, 0, ...block.slice(0, 239)]));
+                                for (let at = 239; at < block.length; at += 243) companionEmit(Uint8Array.from([3, ...block.slice(at, at + 243)]));
+                            }
+                        } else {
+                            companionEmit(Uint8Array.from([2, 0, 0, 0, 0, 1, 0, 0, 0]));
+                            companionEmit(Uint8Array.from([3, ...new Uint8Array(16)]));
+                        }
                         companionEvent([73, 0]);
                     }
                 }, () => {});
@@ -274,6 +284,67 @@ async function startRemote(page) {
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
 }
 
+test('carrier preparation downloads a test WAV; Bluetooth decoding restores the session and enables exact jumps', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.locator('#section-carrier summary').click();
+    await page.locator('#carrier-test').click();
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#carrier-download').click();
+    const download = await downloadPromise;
+    assert.equal(download.suggestedFilename(), 'example_cues_15_tempo_88.tp7-cues.wav');
+    const downloaded = new Uint8Array(await fs.readFile(await download.path()));
+    const source = { filename: 'example_cues_15_tempo_88.wav', sampleRate: 48000, numFrames: 4800000 };
+    const blocks = carrierAudio.encode(carrierAudio.resample(downloaded, 17, 500)).map(block => [...block]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; window.remoteRequests = []; }, blocks);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 3 && !document.querySelector('#carrier-cues button').disabled);
+    assert.match(await page.locator('#carrier-source').innerText(), /TEST points/);
+    assert.equal(await page.locator('#carrier-cues button').nth(1).getAttribute('data-position'), '10000');
+    const request = await page.evaluate(() => window.companionRequests.find(r => r.data[0] === 67).data);
+    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.tp7-cues.wav\0')]);
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[64]]); // Restore session, never auto-play.
+    await page.locator('#carrier-cues button').nth(1).click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').textContent.includes('playback acknowledged'));
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.slice(-3).map(r => r.data)), [[81], [76, 16, 39, 0, 0], [80]]);
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).companionAccess?.result === 'cues-decoded');
+    const report = await page.locator('#remote-report').textContent();
+    assert.ok(!report.includes('carrierBlocks')); assert.ok(report.includes('cues-decoded'));
+    assert.equal(cueCarrier.decode(carrierAudio.resample(downloaded), source).kind, 'test');
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.TP7_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'carrier-mobile.png'), fullPage: true });
+    await page.evaluate(() => window.emitTrack('other.wav'));
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+});
+
+test('carrier rejects a valid payload for a different track and cancellation restores the session', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    const wrong = cueCarrier.makeWave({ filename: 'other.wav', sampleRate: 48000, numFrames: 4800000, kind: 'wav', bpm: null, cues: [0, 480000] });
+    const blocks = carrierAudio.encode(carrierAudio.resample(wrong.bytes)).map(block => [...block]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; }, blocks);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').dataset.status === 'error');
+    assert.match(await page.locator('#carrier-status').innerText(), /different track/);
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.equal(await page.locator('#remote-play').isDisabled(), false);
+    await page.evaluate(() => { window.companionMode = 'silent'; window.companionRequests = []; });
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => window.companionRequests.some(r => r.data[0] === 70));
+    await page.locator('#carrier-cancel').click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').textContent.includes('cancelled'));
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.equal(await page.locator('#remote-play').isDisabled(), false);
+    const valid = cueCarrier.makeWave({ filename: 'example_cues_15_tempo_88.wav', sampleRate: 48000, numFrames: 4800000, kind: 'wav', bpm: null, cues: [0, 480000] });
+    const validBlocks = carrierAudio.encode(carrierAudio.resample(valid.bytes)).map(block => [...block]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; window.companionMode = 'cleanup-fail'; }, validBlocks);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').textContent.includes('cleanup was not confirmed'));
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+});
+
 test('companion audio uses its own service, reports receipt and releases remote controls after cleanup', async t => {
     const page = await openApp(t, 'ble');
     assert.equal(await page.locator('#companion-probe').isDisabled(), true);
@@ -284,7 +355,7 @@ test('companion audio uses its own service, reports receipt and releases remote 
     assert.match(await page.locator('#companion-status').innerText(), /20 bytes in 1 blocks/);
     assert.equal(await page.locator('#remote-play').isDisabled(), true);
     assert.equal(await page.locator('#remote-session').isDisabled(), false);
-    assert.deepEqual(await page.evaluate(() => window.companionRequests.slice(-3).map(r => r.data)), [[72], [68], [65]]);
+    assert.deepEqual(await page.evaluate(() => window.companionRequests.slice(-2).map(r => r.data)), [[68], [65]]);
     await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).companionAccess?.result === 'audio-received');
     await page.locator('#remote-session').click();
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);

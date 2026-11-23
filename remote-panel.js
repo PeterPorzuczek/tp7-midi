@@ -4,7 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 4, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
+    const report = { version: 5, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
         live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);
@@ -448,13 +448,14 @@ document.addEventListener('DOMContentLoaded', () => {
         fileEpoch++;
         for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(new Error('File test cancelled.'));
     }
-    function runCompanionTask(operation) {
+    function runCompanionTask(operation, { restart = false } = {}) {
         return run(async token => {
             if (!identified || !sessionConfirmed || !report.live.file || connectionType !== 'ble') {
                 throw new Error('Connect via Bluetooth, Read TP-7 and start a remote session first.');
             }
             const file = { ...report.live.file };
             const revision = fileRevision;
+            let clean = false;
             window.tp7CompanionBusy = true;
             try {
                 await bleWriteQueue;
@@ -462,7 +463,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (token !== generation || revision !== fileRevision || !isMidiConnected()) throw new Error('Track or connection changed.');
                 };
                 check();
-                await operation(bleDevice, file, check, summary => {
+                clean = await operation(bleDevice, file, check, summary => {
                     if (token === generation) { report.companionAccess = summary; renderReport(); }
                 });
             } finally {
@@ -470,6 +471,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (token === generation) {
                     sessionConfirmed = false;
                     status('Companion test finished. Press Start remote session to use playback controls again.');
+                    if (restart && clean && revision === fileRevision) {
+                        await request(127, [0x40], token, () => token === generation && revision === fileRevision);
+                        if (token === generation && revision === fileRevision) {
+                            sessionConfirmed = true;
+                            status('Companion transfer finished. Remote session restored; playback remains stopped.');
+                        }
+                    }
                 }
             }
         });

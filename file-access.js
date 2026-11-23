@@ -204,9 +204,10 @@ const TP7FileAccess = (() => {
             }
             offset = next;
         }
-        if (!format || ![1, 3, 0xFFFE].includes(format.code) || !format.blockAlign || dataSize === null || dataSize % format.blockAlign) throw new Error('Unsupported WAV audio format.');
+        if (!format || ![1, 3, 0xFFFE].includes(format.code) || !format.sampleRate || !format.channels || !format.blockAlign || dataSize === null || dataSize % format.blockAlign) throw new Error('Unsupported WAV audio format.');
         const numFrames = dataSize / format.blockAlign;
-        if (format.sampleRate !== expected.sampleRate || numFrames !== expected.numFrames) throw new Error('WAV sample rate or length does not match the current TP-7 track.');
+        // Explicit null is used only by the local carrier-preparation reader.
+        if (expected !== null && (format.sampleRate !== expected.sampleRate || numFrames !== expected.numFrames)) throw new Error('WAV sample rate or length does not match the current TP-7 track.');
         const ids = new Set();
         const cues = (cueRecords || []).map(cue => {
             if (ids.has(cue.id) || cue.sampleOffset >= numFrames) throw new Error('Duplicate or out-of-track WAV cue.');

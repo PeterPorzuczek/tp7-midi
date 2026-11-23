@@ -13,7 +13,7 @@ files together, including `tempo.js`, `wav-tempo.js`, `remote-protocol.js` and
 Run the arithmetic and WAV metadata tests with Node.js 20 or newer:
 
 ```sh
-node --test tests/tempo.test.js tests/wav-tempo.test.js tests/remote-protocol.test.js tests/dj-cues.test.js tests/file-access.test.js tests/companion-ble.test.js
+node --test tests/tempo.test.js tests/wav-tempo.test.js tests/remote-protocol.test.js tests/dj-cues.test.js tests/file-access.test.js tests/companion-ble.test.js tests/cue-carrier.test.js
 ```
 
 They cover every representable pitch, exact half-step boundaries, an independent

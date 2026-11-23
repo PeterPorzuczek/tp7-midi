@@ -132,9 +132,39 @@
                 </details>
             </div>
 
+            <div id="section-carrier" class="section">
+                <h2>Prepared Cue Carrier <small>Bluetooth cues</small></h2>
+                <p id="carrier-track" class="dj-track"></p>
+                <p id="carrier-target" class="dj-track remote-help"></p>
+                <p class="remote-help">Read prepared points from a helper WAV stored next to the original track on TP-7. Keep the original track selected. Reading stops playback; the remote session is restored afterwards. This workflow needs a helper file prepared once — it does not extract markers directly from the original WAV over Bluetooth.</p>
+                <div class="remote-actions">
+                    <button id="carrier-read" class="primary" disabled>Read cue carrier</button>
+                    <button id="carrier-cancel" disabled>Cancel</button>
+                    <button id="carrier-copy">Copy cue report</button>
+                </div>
+                <p id="carrier-status" class="remote-status" role="status" aria-live="polite"></p>
+                <p id="carrier-source" class="remote-help"></p>
+                <div id="carrier-cues" class="dj-grid" role="group" aria-label="Validated prepared cue points"></div>
+                <div id="carrier-paging" class="dj-paging" hidden>
+                    <button id="carrier-prev">← Previous</button><span id="carrier-page"></span><button id="carrier-next">Next →</button>
+                </div>
+                <details>
+                    <summary>Prepare a helper WAV once</summary>
+                    <p class="remote-help">Choose a local copy of your prepared WAV to extract its existing cue markers. Audio is skipped and nothing is uploaded. Save the generated helper and copy it to the same TP-7 folder as the original using your normal file-transfer method. Keep its exact filename and audio unchanged. Supports up to 256 markers.</p>
+                    <div class="remote-actions">
+                        <input id="carrier-file" type="file" accept=".wav,audio/wav" hidden>
+                        <button id="carrier-prepare">Prepare from WAV cues</button>
+                        <button id="carrier-test" disabled>Prepare 0 / 10 / 20 s test</button>
+                        <button id="carrier-download" disabled>Save helper WAV</button>
+                    </div>
+                    <p id="carrier-preparation" class="dj-track remote-help">The test option uses the current TP-7 track identity and needs no local original WAV. Its points are explicitly marked TEST.</p>
+                </details>
+                <p class="remote-help">Cue offsets are preserved as sample numbers, then rounded once to the nearest millisecond for TP-7's seek command. Bluetooth and Stop → Seek → Play add latency. Carrier decoding has passed software simulations; the complete carrier workflow still needs verification on TP-7.</p>
+            </div>
+
             <div id="section-companion" class="section">
                 <h2>Companion Bluetooth <small>Audio channel test</small></h2>
-                <p class="remote-help">Uses the separate Bluetooth service found in the TP-7 companion app. This test checks audio reception as a possible route for a future cue carrier file. It does not read existing WAV cue metadata.</p>
+                <p class="remote-help">Audio reception and transfer cleanup were confirmed on TP-7 1.1.11 / Bluefy. This diagnostic test reads a short sample of the current track; use Prepared Cue Carrier above for prepared points.</p>
                 <p class="remote-help">Disconnect other companion apps. After updating this page, reconnect Bluetooth, press Read TP-7 and Start remote session. The test stops playback, requests audio from the current track, then aborts after a small sample. Audio is not saved or included in the report.</p>
                 <div class="remote-actions">
                     <button id="companion-probe" class="primary" disabled>Test companion audio</button>
@@ -435,11 +465,13 @@
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
     <script src="remote-protocol.js?v=20261123-1"></script>
-    <script src="companion-ble.js?v=20261123-2"></script>
+    <script src="companion-ble.js?v=20261123-3"></script>
+    <script src="cue-carrier.js?v=20261123-3"></script>
     <script src="dj-cues.js?v=20261123-1"></script>
-    <script src="file-access.js?v=20261123-1"></script>
+    <script src="file-access.js?v=20261123-3"></script>
     <script src="app.js?v=20261123-2"></script>
-    <script src="remote-panel.js?v=20261123-2"></script>
+    <script src="remote-panel.js?v=20261123-3"></script>
+    <script src="carrier-panel.js?v=20261123-3"></script>
     <script src="companion-panel.js?v=20261123-2"></script>
     <script src="dj-panel.js?v=20261123-1"></script>
     <script src="file-panel.js?v=20261123-2"></script>

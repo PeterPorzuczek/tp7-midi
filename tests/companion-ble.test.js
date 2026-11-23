@@ -99,7 +99,8 @@ test('rejection, cancellation, track change and malformed audio all clean up wit
     for (const mode of ['reject', 'cancel', 'track-change', 'orphan', 'empty']) {
         const f = fixture(mode); const result = await f.run();
         assert.notEqual(result.result, 'audio-received', mode);
-        assert.deepEqual(f.requests.slice(-3), [[127, 72], [127, 68], [127, 65]], mode);
+        const cleanup = mode === 'empty' ? [[127, 68], [127, 65]] : [[127, 72], [127, 68], [127, 65]];
+        assert.deepEqual(f.requests.slice(-cleanup.length), cleanup, mode);
         assert.equal(f.listeners.size, 0, mode);
     }
 });

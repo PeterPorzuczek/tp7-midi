@@ -14,6 +14,14 @@ was tested on hardware later that day and rejected (details below).
 
 ## 2026-11-23 hardware result and separate companion GATT channel
 
+**Subsequent hardware confirmation:** the user's version-4 report at 21:13 UTC
+identifies TP-7 firmware 1.1.11, receives **4237 audio bytes, 3 DATA_FIRST and 16
+DATA_CONT packets**, and gets status 0 for all eight companion-channel requests.
+Abort receives `49 01`; transfer exit receives `45 00`; session stop receives
+`42 00`; `cleanupErrors` is empty. This validates the GATT service, request framing,
+current-track transfer and cleanup on Bluefy. It does not yet validate opening a
+different helper filename, PCM decoding, carrier recovery or native cue extraction.
+
 The user's latest, partially pasted report contains two complete FILE INIT
 transactions at 20:50:54 and 20:50:57 UTC. Request IDs 12 and 13 use outer command
 5 and payload `01 00 00 00 10 00`. Both responses have **status 2, empty data**.
@@ -48,7 +56,8 @@ audio with `(0, 0)`. It aborts at a 4096-byte target or waits for a natural comp
 an 8-second audio deadline and 64 KiB receive-count limit bound the sample. Request
 ACKs have five-second deadlines. This uses the app's full-track request followed
 by early abort; the units of nonzero offset/duration arguments are not inferred.
-The client retains no audio payload and does not yet decode ADPCM.
+This short diagnostic retains no audio payload. The separate carrier reader
+described below retains bounded blocks temporarily for decoding.
 
 Finally it attempts ABORT_AUDIO (`48`), QUIT_FILE_TRANSFER (`44`) and STOP_SESSION
 (`41`) in order, each with a two-second reply deadline. Failed cleanup is shown
@@ -62,10 +71,94 @@ Report version 4 includes `companionAccess`: stage, requests, ACK status, audio
 packet/byte counts and cleanup outcome. It never labels audio receipt as native
 cue support. Unit and browser simulations cover packet boundaries, notification
 DataView offsets, missing service, rejection, cancellation, track changes,
-malformed audio and cleanup. **Real Bluefy/device reception is still unverified.**
-A future audio carrier must survive resampling and lossy ADPCM, and must validate
-its contents (e.g. checksum plus track identity); raw byte preservation cannot be
-assumed. No carrier generator/decoder is claimed as implemented by this change.
+malformed audio and cleanup. Real Bluefy/device reception was confirmed by the
+later report summarized above.
+
+## Prepared cue carrier (report version 5)
+
+`cue-carrier.js` and `carrier-panel.js` implement a prepared audio sidecar. A local
+WAV's RIFF `cue ` sample offsets and optional ACID BPM are read with the existing
+bounded parser; its `data` chunk is skipped. This preparation call explicitly
+passes `expected = null`, while device FILE reads still require matching the live
+track. A test-only generator uses 0/10/20 seconds within the current track and
+sets a flag that remains visible after decoding. Neither generator changes the
+original WAV or writes to TP-7.
+
+### Codec evidence
+
+Static inspection of `libGroAudio.so` from the same companion package found
+`dvi_adpcm_decode` at RVA `0x4458` (672 bytes), wrapper `_dvi_adpcm_decode` at
+`0x46F8`. Library SHA-256:
+`65d80ec3fe9807255f48fe528bc97ecb26348a2e03d506b6d685c2f60675347e`.
+The decoder reads a **signed big-endian 16-bit predictor followed by one step-index
+byte**. Compressed nibbles start immediately at byte 3, high nibble first. The
+initial predictor is not emitted as a sample. Each block yields `(length - 3) * 2`
+PCM samples. Step and index tables at `0x7D0` / `0x882` match IMA's 89-step table.
+The code clamps predictor to signed 16-bit and index to 0–88 after each nibble.
+
+This differs from ordinary little-endian IMA WAV block framing. It also omits the
+reserved fourth byte in the [RFC 3551 DVI4 header](https://www.rfc-editor.org/rfc/rfc3551#section-4.5.1).
+The receiver removes the separate four-byte DATA_FIRST prefix before collecting
+the compressed block, exactly as the companion does. A new DATA_FIRST finalizes
+the preceding block; natural AUDIO_COMPLETE finalizes the last block. No binary
+from the app is executed or distributed with this project.
+
+### On-disk audio and payload
+
+The helper name replaces `.wav` with `.tp7-cues.wav`, in the source track's folder.
+It is mono PCM, 48 kHz, signed 16-bit, 150 ms leading/trailing silence. Bits are
+MSB first, 400 baud, using 1200 Hz for zero and 2400 Hz for one (3/6 cycles per
+120-sample symbol). At the companion's 16 kHz output each symbol is 40 samples.
+An eight-byte `55` training sequence precedes sync `D3 91 6B C5 A7 2E 84 F0`,
+uint16 LE payload length, payload, and uint32 LE CRC-32/IEEE covering length plus
+payload. This is a project-specific carrier format, not a TE command or text CUE.
+
+Payload v1 (all multibyte numeric fields LE):
+
+| Offset | Field |
+| --- | --- |
+| 0 | version 1 |
+| 1 | source kind: 0 original WAV markers, 1 test points |
+| 2 | uint32 original sample rate |
+| 6 | uint32 original frame count |
+| 10 | float64 stored BPM; zero means absent |
+| 18 | uint16 UTF-8 filename byte count |
+| 20 | uint16 cue count (1–256) |
+| 22 | two reserved zero bytes |
+| 24 | UTF-8 original filename, then uint32 cue sample offsets in time order |
+
+The decoder searches the initial 0.75 seconds over all 40 sample phases, requires
+a matching training/sync sequence, then compares quadrature tone energy inside
+each symbol. It rejects weak symbols, truncation, bad CRC, unknown versions,
+reserved bits, invalid ranges, invalid UTF-8 and mismatched source identity.
+Filename, sample rate and total frames must match the still-current TP-7 track.
+This identity check is not a hash of the audio: the helper must be regenerated
+after replacing audio or changing markers. CRC detects transmission corruption;
+it is not an authenticity mechanism.
+
+Each original sample offset is converted independently with integer arithmetic to
+nearest-millisecond seek position. No rounded time intervals are accumulated.
+Device/Bluetooth latency and the millisecond seek interface still limit playback
+accuracy. The generated waveform contains the cue data, not the original music.
+
+### Transfer, UI and validation boundaries
+
+The carrier reader opens track 0 of the helper using the observed source folder
+and derived helper filename. It requests `(0, 0)` and waits for natural completion
+instead of aborting at 4 KiB. Limits: 512 KiB received, 40 seconds wall-clock for
+audio, 40 seconds decoded audio, 32 KiB per ADPCM block. It always exits transfer
+and closes the companion session; ABORT is sent only if natural completion has
+not occurred. After clean teardown it reopens the ordinary remote session without
+resuming playback. Cleanup failure suppresses cue buttons and asks for reconnect.
+Cancellation and source-track/connection changes invalidate the operation. The
+report contains decoded marker metadata and counts, never audio blocks/samples.
+
+Tests cover fixed codec vectors (header endian, nibble order, saturation), local
+WAV metadata reads without audio, all 40 symbol phases under resampling/ADPCM/noise,
+256 cues and UTF-8 names, deliberate CRC corruption, invalid lengths/identity,
+browser download → simulated BLE decoding → restored session → exact time jump,
+and cancellation. **These simulations do not establish successful carrier recovery
+on real TP-7 hardware.** The built-in test generator is the next hardware check.
 
 ## 2026-11-23: alternative FILE interface
 
@@ -168,12 +261,9 @@ Additional static verification of Android companion 1.1.4 build 54:
   16-bit WaveFormat before saving the received samples. It does not preserve
   the original file's RIFF chunk table.
 
-Thus the existing companion audio stream is not evidence of arbitrary raw-file
-access. A possible later workaround, if FILE is rejected, is to encode marker
-data as a short prepared audio carrier and decode its downloaded samples with a
-checksum. That would require an additional WAV on TP-7 and independent hardware
-validation of resampling, transfer framing and state restoration. It is not
-implemented or claimed working in this release.
+Thus the companion audio stream is not evidence of arbitrary raw-file access.
+The prepared carrier implemented above requires an additional WAV on TP-7; its
+end-to-end operation is still awaiting hardware validation.
 
 ## Evidence checked on 2026-11-16
 
