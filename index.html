@@ -132,9 +132,21 @@
                 </details>
             </div>
 
+            <div id="section-companion" class="section">
+                <h2>Companion Bluetooth <small>Audio channel test</small></h2>
+                <p class="remote-help">Uses the separate Bluetooth service found in the TP-7 companion app. This test checks audio reception as a possible route for a future cue carrier file. It does not read existing WAV cue metadata.</p>
+                <p class="remote-help">Disconnect other companion apps. After updating this page, reconnect Bluetooth, press Read TP-7 and Start remote session. The test stops playback, requests audio from the current track, then aborts after a small sample. Audio is not saved or included in the report.</p>
+                <div class="remote-actions">
+                    <button id="companion-probe" class="primary" disabled>Test companion audio</button>
+                    <button id="companion-cancel" disabled>Cancel test</button>
+                    <button id="companion-copy">Copy companion report</button>
+                </div>
+                <p id="companion-status" class="remote-status" role="status" aria-live="polite">Waiting for Bluetooth and the current track.</p>
+            </div>
+
             <div id="section-file-access" class="section">
                 <h2>Bluetooth File Access <small>Experimental test</small></h2>
-                <p class="remote-help">Tests an alternative TE file protocol. Support on TP-7 is unconfirmed. Use while playback is stopped, with other companion apps disconnected. Start with Read TP-7 → Start remote session in Device Access.</p>
+                <p class="remote-help">The TP-7 hardware report from 23 November 2026 rejected this protocol with “command not found”. Retained for other firmware tests; retrying it will not enable file access. Use the separate Companion Bluetooth test above to investigate audio reception.</p>
                 <div class="remote-actions">
                     <button id="file-probe" class="primary" disabled>Test file access</button>
                     <button id="file-cancel" disabled>Cancel test</button>
@@ -423,11 +435,13 @@
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
     <script src="remote-protocol.js?v=20261123-1"></script>
+    <script src="companion-ble.js?v=20261123-2"></script>
     <script src="dj-cues.js?v=20261123-1"></script>
     <script src="file-access.js?v=20261123-1"></script>
-    <script src="app.js"></script>
-    <script src="remote-panel.js?v=20261123-1"></script>
+    <script src="app.js?v=20261123-2"></script>
+    <script src="remote-panel.js?v=20261123-2"></script>
+    <script src="companion-panel.js?v=20261123-2"></script>
     <script src="dj-panel.js?v=20261123-1"></script>
-    <script src="file-panel.js?v=20261123-1"></script>
+    <script src="file-panel.js?v=20261123-2"></script>
 </body>
 </html>

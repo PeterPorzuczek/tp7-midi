@@ -12,7 +12,7 @@ let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/file-access.js', '/file-panel.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/file-access.js', '/file-panel.js', '/companion-ble.js', '/companion-panel.js']);
     server = http.createServer(async (request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         const name = pathname === '/' ? '/index.html' : pathname;
@@ -47,6 +47,8 @@ async function openApp(t, mode = 'usb') {
         window.remoteMode = 'ok';
         window.remoteRequests = [];
         window.fileMode = 'unsupported';
+        window.companionMode = 'ok';
+        window.companionRequests = [];
         let fileOffset = 0;
         let fileNode = 20;
         let fileBytes = null;
@@ -206,15 +208,46 @@ async function openApp(t, mode = 'usb') {
             window.emitCompanion([75, ...bytes, 5, 26, 11, 17, 12, 0, 0,
                 ...new TextEncoder().encode(`recordings\0${filename}\0`)]);
         };
+        const companionListeners = new Set();
+        const companionEmit = bytes => {
+            const padded = new Uint8Array(bytes.length + 4); padded.set(bytes, 2);
+            companionCharacteristic.value = new DataView(padded.buffer, 2, bytes.length);
+            for (const listener of companionListeners) listener({ target: companionCharacteristic });
+        };
+        const companionEvent = data => {
+            const frame = TP7RemoteProtocol.encode(1, 127, data); frame[6] = 64; frame[7] = 0;
+            for (const packet of TP7CompanionBLE.packets(frame)) companionEmit(packet);
+        };
+        let companionDecoder;
+        const companionCharacteristic = {
+            properties: { writeWithoutResponse: true },
+            addEventListener: (_, fn) => companionListeners.add(fn), removeEventListener: (_, fn) => companionListeners.delete(fn),
+            async startNotifications() {}, async stopNotifications() {},
+            async writeValueWithoutResponse(packet) {
+                companionDecoder ||= new TP7CompanionBLE.Receiver(frame => {
+                    const reply = [...frame]; reply[6] &= ~64; reply.splice(9, 0, 0);
+                    const request = TP7RemoteProtocol.parse(reply); window.companionRequests.push(request);
+                    const data = request.command === 1 ? [...new TextEncoder().encode('product:TP-7;sw_version:1.1.11;')] : [];
+                    if (request.data[0] === 67) companionEvent([69, 1]);
+                    const response = TP7RemoteProtocol.encode(request.id, request.command, data); response[6] &= ~64; response.splice(9, 0, 0);
+                    for (const p of TP7CompanionBLE.packets(response)) companionEmit(p);
+                    if (request.data[0] === 70 && window.companionMode !== 'silent') {
+                        companionEmit(Uint8Array.from([2, 0, 0, 0, 0, 1, 0, 0, 0]));
+                        companionEmit(Uint8Array.from([3, ...new Uint8Array(16)]));
+                        companionEvent([73, 0]);
+                    }
+                }, () => {});
+                companionDecoder.push(packet);
+            },
+        };
         const device = {
             name: 'TP-7', addEventListener() {},
-            gatt: { connected: true, async connect() {
-                return { async getPrimaryService() {
-                    return { async getCharacteristic() { return characteristic; } };
-                } };
+            gatt: { connected: true, async connect() { return this; }, async getPrimaryService(uuid) {
+                if (uuid === TP7CompanionBLE.SERVICE && window.companionMode === 'missing') throw new Error('Companion service unavailable');
+                return { async getCharacteristic() { return uuid === TP7CompanionBLE.SERVICE ? companionCharacteristic : characteristic; } };
             } },
         };
-        Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async () => device } });
+        Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async options => { window.bluetoothOptions = options; return device; } } });
     }, mode);
     const page = await context.newPage();
     page.setDefaultTimeout(8000);
@@ -241,6 +274,47 @@ async function startRemote(page) {
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
 }
 
+test('companion audio uses its own service, reports receipt and releases remote controls after cleanup', async t => {
+    const page = await openApp(t, 'ble');
+    assert.equal(await page.locator('#companion-probe').isDisabled(), true);
+    await startRemote(page);
+    assert.ok(await page.evaluate(() => window.bluetoothOptions.optionalServices.includes(TP7CompanionBLE.SERVICE)));
+    await page.locator('#companion-probe').click();
+    await page.waitForFunction(() => document.getElementById('companion-status').textContent.startsWith('Companion audio received:'));
+    assert.match(await page.locator('#companion-status').innerText(), /20 bytes in 1 blocks/);
+    assert.equal(await page.locator('#remote-play').isDisabled(), true);
+    assert.equal(await page.locator('#remote-session').isDisabled(), false);
+    assert.deepEqual(await page.evaluate(() => window.companionRequests.slice(-3).map(r => r.data)), [[72], [68], [65]]);
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).companionAccess?.result === 'audio-received');
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
+    await page.setViewportSize({ width: 375, height: 812 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.env.TP7_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'companion-mobile.png'), fullPage: true });
+});
+
+test('companion service failure and cancellation are visible; cancellation cleans up and blocks MIDI during transfer', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => { window.companionMode = 'missing'; });
+    await page.locator('#companion-probe').click();
+    await page.waitForFunction(() => document.getElementById('companion-status').dataset.status === 'error');
+    assert.match(await page.locator('#companion-status').innerText(), /service unavailable/);
+    assert.deepEqual(await page.evaluate(() => window.companionRequests), []);
+    await page.locator('#remote-session').click();
+    await page.waitForFunction(() => !document.getElementById('companion-probe').disabled);
+    await page.evaluate(() => { window.companionMode = 'silent'; });
+    await page.locator('#companion-probe').click();
+    await page.waitForFunction(() => window.companionRequests.some(r => r.data[0] === 70));
+    await page.evaluate(() => window.emitCompanion([71, 201, 202, 203, 204, 205, 206]));
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).events.some(e => e.opcode === 71 && e.payloadOmitted));
+    assert.ok(!(await page.locator('#remote-report').innerText()).includes('201,'));
+    assert.match(await page.evaluate(async () => { try { await transmitMidiBatch([[176, 14, 127]]); } catch (error) { return error.message; } }), /companion transfer/);
+    await page.locator('#companion-cancel').click();
+    await page.waitForFunction(() => document.getElementById('companion-status').textContent.startsWith('Companion test cancelled.'));
+    assert.deepEqual(await page.evaluate(() => window.companionRequests.slice(-3).map(r => r.data)), [[72], [68], [65]]);
+});
+
 test('FILE rejection is reported honestly, with no fallback commands or transport changes', async t => {
     const page = await openApp(t, 'ble');
     assert.equal(await page.locator('#file-probe').isDisabled(), true);
@@ -251,6 +325,7 @@ test('FILE rejection is reported honestly, with no fallback commands or transpor
     assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => [r.command, ...r.data])), [[5, 1, 0, 0, 0, 16, 0]]);
     assert.match(await page.locator('#file-status').innerText(), /rejected FILE/);
     assert.equal(await page.locator('#file-read').isDisabled(), true);
+    assert.equal(await page.locator('#file-probe').isDisabled(), true);
     assert.equal(await page.locator('#file-cues button').count(), 0);
     await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).fileAccess?.result === 'unsupported');
     assert.equal(await page.locator('#remote-play').isDisabled(), false);

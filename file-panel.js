@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el('file-status').dataset.status = error ? 'error' : '';
     };
     function controls() {
-        const idle = remote.connected && remote.identified && !remote.busy && !remote.fileBlocked && !running;
+        const idle = remote.connected && remote.identified && !remote.busy && !remote.fileBlocked && !remote.fileUnsupported && !running;
         el('file-probe').disabled = !idle;
         el('file-read').disabled = !idle || !discovery || !el('file-select').value;
         el('file-select').disabled = !idle || !discovery;

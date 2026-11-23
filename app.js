@@ -98,9 +98,11 @@ function isMidiConnected() {
 // Send a batch immediately on USB, or in one ordered BLE write. The Promise
 // confirms delivery to the browser/transport, not a TP-7 state acknowledgement.
 function transmitMidiBatch(messages, isCurrent = () => true) {
+    if (window.tp7CompanionBusy) return Promise.reject(new Error('Wait for the companion transfer test to finish.'));
     if (connectionType === 'ble' && bleMidiCharacteristic) {
         const characteristic = bleMidiCharacteristic;
         const write = bleWriteQueue.then(async () => {
+            if (window.tp7CompanionBusy) throw new Error('Companion transfer test is active.');
             if (connectionType !== 'ble' || bleMidiCharacteristic !== characteristic || !isMidiConnected()) {
                 throw new Error('Bluetooth disconnected. Reconnect and apply again.');
             }
@@ -740,7 +742,7 @@ async function connectBLE() {
                 { services: [BLE_MIDI_SERVICE] },
                 { namePrefix: 'TP-7' }
             ],
-            optionalServices: [BLE_MIDI_SERVICE]
+            optionalServices: [BLE_MIDI_SERVICE, TP7CompanionBLE.SERVICE]
         });
 
         bleDevice.addEventListener('gattserverdisconnected', onBLEDisconnected);

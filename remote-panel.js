@@ -4,7 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 3, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null,
+    const report = { version: 4, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
         live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);
@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const getState = () => ({ file: report.live.file ? { ...report.live.file } : null,
         positionMs: report.live.position?.positionMs ?? null,
         connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy,
-        identified, fileActive, fileBlocked, connection: generation });
+        identified, fileActive, fileBlocked, fileUnsupported: report.fileAccess?.result === 'unsupported', connection: generation });
 
     function renderReport() {
         if (renderTimer !== null) return;
@@ -119,6 +119,7 @@ document.addEventListener('DOMContentLoaded', () => {
             fileEpoch++;
             fileBlocked = false;
             report.fileAccess = null;
+            report.companionAccess = null;
             for (const request of pending.values()) request.reject(new Error('Connection changed. Read TP-7 again.'));
             if (notificationEndpoint) notificationEndpoint.removeEventListener('characteristicvaluechanged', onNotification);
             if (inputEndpoint) inputEndpoint.onmidimessage = null;
@@ -158,16 +159,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!reply) {
             const event = protocol.parseEvent(bytes);
             if (event) {
-                if (!recordCompanion(event.data, 'unsolicited')) addEvent('companion-event', { data: event.data.slice(0, 2048) });
+                if (!recordCompanion(event.data, 'unsolicited')) addEvent('companion-event', window.tp7CompanionBusy ?
+                    { opcode: event.data[0], byteLength: event.data.length, payloadOmitted: true } : { data: event.data.slice(0, 2048) });
                 return;
             }
-            if (bytes[0] === 0xF0) addEvent('unrecognized-sysex', { bytes: Array.from(bytes).slice(0, 512) });
+            if (bytes[0] === 0xF0) addEvent('unrecognized-sysex', window.tp7CompanionBusy ?
+                { byteLength: bytes.length, payloadOmitted: true } : { bytes: Array.from(bytes).slice(0, 512) });
             return;
         }
         const request = pending.get(reply.id);
         // File data pages can contain a few incidental audio bytes. Record
         // counts/page numbers, not their contents, in the shareable report.
-        addEvent('reply', request?.fileData ? { ...reply, data: reply.data.slice(0, 2), byteLength: reply.data.length, payloadOmitted: true } :
+        addEvent('reply', window.tp7CompanionBusy ? { ...reply, data: [], byteLength: reply.data.length, payloadOmitted: true } :
+            request?.fileData ? { ...reply, data: reply.data.slice(0, 2), byteLength: reply.data.length, payloadOmitted: true } :
             { ...reply, data: reply.data.slice(0, 2048) });
         if (reply.command === 127 && reply.status === 0) recordCompanion(reply.data, 'reply');
         if (!request || reply.command !== request.command) return;
@@ -191,7 +195,7 @@ document.addEventListener('DOMContentLoaded', () => {
             (bytes[0] & 0xC0) === 0x80 && bytes.slice(1).every((byte, index) =>
                 index % 2 === 0 ? byte >= 128 : byte === 0xF8 || byte === 0xFE);
         if (clockOnly) bluetooth.ignoredClockPackets++;
-        else if (!fileActive) {
+        else if (!fileActive && !window.tp7CompanionBusy) {
             bluetooth.recentPackets.push({ time: new Date().toISOString(), bytes: Array.from(bytes).slice(0, 512) });
             if (bluetooth.recentPackets.length > 64) bluetooth.recentPackets.shift();
             renderReport();
@@ -444,6 +448,32 @@ document.addEventListener('DOMContentLoaded', () => {
         fileEpoch++;
         for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(new Error('File test cancelled.'));
     }
-    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runFileTask, cancelFileTask };
+    function runCompanionTask(operation) {
+        return run(async token => {
+            if (!identified || !sessionConfirmed || !report.live.file || connectionType !== 'ble') {
+                throw new Error('Connect via Bluetooth, Read TP-7 and start a remote session first.');
+            }
+            const file = { ...report.live.file };
+            const revision = fileRevision;
+            window.tp7CompanionBusy = true;
+            try {
+                await bleWriteQueue;
+                const check = () => {
+                    if (token !== generation || revision !== fileRevision || !isMidiConnected()) throw new Error('Track or connection changed.');
+                };
+                check();
+                await operation(bleDevice, file, check, summary => {
+                    if (token === generation) { report.companionAccess = summary; renderReport(); }
+                });
+            } finally {
+                window.tp7CompanionBusy = false;
+                if (token === generation) {
+                    sessionConfirmed = false;
+                    status('Companion test finished. Press Start remote session to use playback controls again.');
+                }
+            }
+        });
+    }
+    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runFileTask, cancelFileTask, runCompanionTask };
     connectionChanged();
 });

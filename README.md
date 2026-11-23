@@ -86,11 +86,32 @@ Each tap uses the working Stop → Set position → Play sequence. Bluetooth and
 device latency cause a playback interruption; there is no live beat quantization
 or synchronization to another deck. Existing TP-7 cues are not written or erased.
 
-## Experimental Bluetooth file access
+## Companion Bluetooth audio investigation
+
+The 23 November 2026 hardware report rejected generic FILE command 5 twice
+with status 2 (command not found). Retrying that test does not enable cue access.
+
+**Companion Bluetooth → Test companion audio** uses the separate GATT service
+identified in the official companion application's binary. Reconnect Bluetooth
+after loading this version, then use **Read TP-7 → Start remote session** first.
+Close other companion apps. The test stops playback, opens track 0 of the current
+file, requests audio and aborts after a small sample (4 KiB target; 8-second receive
+timeout). It then exits transfer mode and closes its session. Press **Start remote
+session** again to use the normal playback controls. If cleanup is not acknowledged,
+disconnect and reconnect before continuing. Cancel also attempts this cleanup.
+
+The report contains stages, request results and byte counts, not the audio.
+**Audio reception is not native cue extraction.** The companion transcodes audio
+to ADPCM / 16 kHz mono and reconstructs a WAV, losing original RIFF metadata. A
+possible later workaround is a separately prepared WAV carrying cue data as audio,
+but that carrier and its decoding have not been implemented or hardware-verified.
+The current test establishes whether Bluefy can access this channel on the device.
+
+## Earlier generic FILE experiment
 
 **Bluetooth File Access** tests TE's generic FILE interface over the existing
 Bluetooth/MIDI connection. Its command format comes from TE's official Sample
-Tool, but **support on TP-7 has not yet been confirmed on hardware**.
+Tool, but **the user's TP-7 rejected this interface on the tested MIDI connection**.
 
 In Bluefy: **Read TP-7 → Start remote session**, stop playback, disconnect other
 companion apps, then press **Test file access**. If the device returns a listing,
@@ -98,8 +119,8 @@ choose **Read selected file**. The reader can extract actual cue/BPM metadata fr
 the current WAV by skipping its audio bytes, or download a listed `.cue`/`.json`
 file up to 64 KiB. Verified WAV markers become jump buttons. The app does not
 create or write any device files. Rejected/unknown responses stop the test and
-remain in **Copy file test report**. This is a hardware experiment, not a claim
-that every TP-7 exposes a filesystem through Bluetooth.
+remain in **Copy file test report**. An unsupported response disables retries for
+that connection. This panel is retained for investigating other firmware.
 
 See [source evidence and test boundaries](docs/REMOTE_PROTOCOL.md#2026-11-23-alternative-file-interface).
 

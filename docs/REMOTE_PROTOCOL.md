@@ -10,7 +10,62 @@ beat/bar jumps as an alternative. That workflow is implemented in **DJ Jump Grid
 On 2026-11-23 a separate **Bluetooth File Access** experiment was added: TE's
 generic FILE command can potentially read the original WAV's marker chunks or
 a small sidecar over the existing MIDI connection. Its availability on TP-7
-must be established by an actual response; simulation is not hardware evidence.
+was tested on hardware later that day and rejected (details below).
+
+## 2026-11-23 hardware result and separate companion GATT channel
+
+The user's latest, partially pasted report contains two complete FILE INIT
+transactions at 20:50:54 and 20:50:57 UTC. Request IDs 12 and 13 use outer command
+5 and payload `01 00 00 00 10 00`. Both responses have **status 2, empty data**.
+Companion transport requests in the same report succeed. This is an explicit
+command-not-found response, not a timeout or a BLE reassembly failure. The raw
+report is private and is not committed. The UI now describes this result and
+disables further FILE attempts in a connection after an unsupported reply.
+
+Further static inspection of companion Android 1.1.4 (54), arm64, found a distinct
+BLE transport in `TeMidiBleService`. Binary provenance is recorded below; the
+application was never installed or executed. Relevant RVAs in `libil2cpp.so`:
+
+| Method | RVA | Finding |
+| --- | --- | --- |
+| `TeMidiBleService..ctor` | `0xCAA750` | service `cc12911c-ce96-4100-9db2-35b1b534d5cf`, characteristic `36a339c2-991a-486a-acfe-c840b39ae499` |
+| `SendSysex` | `0xCA94D4` | 20-byte packets from `TeMidiOverBleSysexSendBuffer` |
+| `SetData` (send buffer) | `0xCBA2A4` | message-type prefix 1 on every packet, initial BLE timestamps, final timestamp before F7; no header on continuation fragments |
+| `OnCharacteristicValueChanged` | `0xCA9E54` | prefix 1 MIDI; prefix 2 first audio block, skipping four following bytes; prefix 3 continuation audio |
+| `FinishAudioData` | `0xCA9694` | DVI ADPCM blocks decoded before emitting PCM |
+| `EnterFileTransfer` | `0xCAD560` | `43`, track byte, NUL-terminated folder, NUL-terminated filename |
+| `RequestAudio` | `0xCAD7C4` | `46`, two uint32 LE arguments; download menu calls with `(0, 0)` |
+| `DownloadMenu.BeginState` | `0xC97F10` | first track index 0; waits for transfer-active before requesting audio |
+
+The constructor's relocations at `0x1B028F0` and `0x1B028F8` point to string slots
+`0x1B81AC8` and `0x1B792C0`, respectively. These resolve to the UUIDs above, **not**
+the standard MIDI service `03b80e5a-…` or the other BLE UUIDs in the binary.
+
+`companion-ble.js` implements this separate packet transport. The explicit test
+opens the service, GREET-identifies TP-7, starts a session, stops playback, enters
+track-0 transfer for the already observed file, waits for `45 01`, then requests
+audio with `(0, 0)`. It aborts at a 4096-byte target or waits for a natural completion;
+an 8-second audio deadline and 64 KiB receive-count limit bound the sample. Request
+ACKs have five-second deadlines. This uses the app's full-track request followed
+by early abort; the units of nonzero offset/duration arguments are not inferred.
+The client retains no audio payload and does not yet decode ADPCM.
+
+Finally it attempts ABORT_AUDIO (`48`), QUIT_FILE_TRANSFER (`44`) and STOP_SESSION
+(`41`) in order, each with a two-second reply deadline. Failed cleanup is shown
+explicitly, with instructions to reconnect. Cancel and track changes also clean
+up. MIDI writes and the other remote operations are blocked during the test;
+the ordinary session must be restarted afterwards. Updated Bluetooth selection
+requests access to the additional service, so the page must be reloaded and the
+device reconnected once. No arbitrary opcode scan or device file write is used.
+
+Report version 4 includes `companionAccess`: stage, requests, ACK status, audio
+packet/byte counts and cleanup outcome. It never labels audio receipt as native
+cue support. Unit and browser simulations cover packet boundaries, notification
+DataView offsets, missing service, rejection, cancellation, track changes,
+malformed audio and cleanup. **Real Bluefy/device reception is still unverified.**
+A future audio carrier must survive resampling and lossy ADPCM, and must validate
+its contents (e.g. checksum plus track identity); raw byte preservation cannot be
+assumed. No carrier generator/decoder is claimed as implemented by this change.
 
 ## 2026-11-23: alternative FILE interface
 
@@ -95,11 +150,10 @@ small sidecar download, true-marker jumps, unsupported commands, ignored offsets
 truncation, wrong pages, mismatched tracks, cancellation and firmware debug frames.
 These are **software tests**, not measurements from a TP-7.
 
-No TP-7 is attached to the development computer. To establish the hardware result
-on the user's Bluefy connection: Read TP-7 → Start remote session → stop playback
-→ Test file access. If listing works, use Read selected file. Copy file test report
-exports the exact requests, acknowledgements, INIT data, listing and outcome.
-Do not infer support from the existence of this experimental UI.
+No TP-7 is attached to the development computer. The user's subsequent Bluefy
+report established rejection of FILE INIT; there is no need to repeat that test
+on the same firmware/connection. The simulator still exercises the parser for
+future research, without implying that real TP-7 file access works.
 
 ### Why the companion download does not preserve WAV markers
 
@@ -262,7 +316,7 @@ for up to 100 tracks; storage failures do not prevent use.
   Physical cue selection
   on the device can reveal whether the companion session emits useful events.
   Unknown event payloads remain raw. There is no opcode sweep or firmware update
-  operation. Companion controls do not transfer files; the separate FILE
+  operation. The regular companion controls do not transfer files; the separate FILE
   experiment above is explicitly started by the user. Nothing is sent automatically
   by these panels upon connection.
 - Reports stay in the browser until the user copies them. They contain firmware,
