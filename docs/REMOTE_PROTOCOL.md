@@ -2,11 +2,124 @@
 
 The requested behavior is selection and playback of **existing, device-loaded
 cue markers**, without asking the user for a WAV. Automatic marker enumeration
-and cue-number selection are **not yet implemented**. **TP-7 Device Access** now
+and cue-number selection are **not hardware-verified**. **TP-7 Device Access** now
 reads live track/transport events and implements the companion application's
 position command. A time jump is not selection of a device-native cue number.
 On 2026-11-17 the user confirmed manual time jumps work and requested generated
 beat/bar jumps as an alternative. That workflow is implemented in **DJ Jump Grid**.
+On 2026-11-23 a separate **Bluetooth File Access** experiment was added: TE's
+generic FILE command can potentially read the original WAV's marker chunks or
+a small sidecar over the existing MIDI connection. Its availability on TP-7
+must be established by an actual response; simulation is not hardware evidence.
+
+## 2026-11-23: alternative FILE interface
+
+### Primary source and independent device evidence
+
+The [official EP Sample Tool](https://teenage.engineering/apps/ep-sample-tool)
+served [index-mzHAnDsS.js](https://teenage.engineering/apps/ep-sample-tool/assets/index-mzHAnDsS.js)
+when inspected on 2026-11-23. SHA-256:
+`ad10f8c52b03f1a94bc341321c53719ef8894f5be3add3e9f8b73dd6d530f847`.
+The source has `SysExFileInitRequest`, `SysExFileListRequest`,
+`SysExGetFileInitRequest`, `SysExGetFileDataRequest` and `iterGet`.
+They use outer TE command **5**, independently of the TP-7 companion command 127.
+The existing seven-bit packing and request-ID envelope apply; this app keeps the
+TP-7 device byte `0x19`.
+
+This is a materially different lead from the companion audio transfer.
+[An OP-XY owner's device log](https://github.com/NeoVand/op-xy-agent/blob/main/docs/research/90-device-probe.md)
+records successful FILE INIT and root LIST despite rejected SETTINGS INIT.
+That means a rejected settings reader does not imply that FILE is unavailable.
+It does **not** establish that TP-7 implements the same commands or exposes its
+recordings filesystem. EP and OP-XY differ in some FILE subcommands.
+
+Read operations checked against TE's JavaScript (raw payloads before packed7):
+
+| Operation | Payload | Expected successful response data |
+| --- | --- | --- |
+| INIT | `01 00 00 00 10 00` | one flags/version byte, uint32 BE advertised chunk size |
+| LIST | `04`, uint16 BE page, uint16 BE directory ID | page echo, repeated node entries |
+| GET open | `03 00`, uint16 BE file ID, uint32 BE byte offset | file ID, flags, uint32 BE full size, UTF-8 name + NUL |
+| GET page | `03 01`, uint16 BE page | page echo followed by file bytes |
+
+A node entry is uint16 BE ID, byte flags, uint32 BE size, name + NUL.
+The low flag bits mean file (1) / directory (2), with read capability (4).
+**INIT flag 0 means no subscription**; the official constant names flag 1
+`TE_SYSEX_FILE_INIT_SUBSCRIBE`. It must not be described as a write-mode switch.
+The official client uses the advertised chunk size for PUT payloads, not as a
+mandatory GET response size; a large advertised capacity does not preclude LIST.
+
+### What the experiment does
+
+After actual TP-7 identification, **Test file access** sends INIT, then LIST for
+root and the observed current track folder. It follows returned directory IDs,
+never guesses IDs or tries write, delete, rename, audition, mode or DFU commands.
+A successful INIT alone is not shown as successful file access. Unknown layouts,
+rejection and timeout remain explicit results in report version 3.
+
+After a successful listing, **Read selected file** can:
+
+- Read the current WAV's RIFF headers, `fmt `, `cue ` and `acid` chunks. It skips
+  `data` by byte offset. Before trusting a nonzero GET offset it compares an
+  overlapping range at offset 12 with bytes already received at offset 0.
+  Ignored/rejected offsets stop the operation; there is no full-audio fallback.
+  Every GET must match the observed node ID, filename and full file size.
+- Download a listed `.cue` or `.json` sidecar up to 64 KiB byte-for-byte. Its
+  contents are saved on explicit request and are not assumed to be native TP-7
+  marker metadata. The experiment does not create a sidecar on the device.
+
+WAV cues use `sampleOffset` at record byte 20, not the record's `position` field
+or ID. Sample rate and audio frame count must match the current companion track
+event. Only after all chunks and markers validate are real cue jump buttons
+shown. They use the same acknowledged time-jump mechanism already user-tested.
+Markers and metadata are held in memory for the current connection/track.
+Stored ACID BPM is displayed as metadata, without changing the existing tempo
+matching inputs or claiming that it measures the audio's actual tempo.
+
+The scan is bounded to 256 requests, approximately one minute, 256 KiB of reply
+data, 32 pages per folder and four path components. The client asks for 4096-byte
+responses and rejects an unexpectedly large decoded response. Operations serialize
+with the existing remote controls. Cancellation, track change and disconnection
+invalidate queued requests. Firmware debug frames stop FILE traffic and latch a
+retry block until reconnection; the UI asks the user to restart the device first.
+Raw BLE packets are omitted while the file task is active, and FILE data-page
+replies record only page/count information, so incidental audio bytes are not
+placed in the normal shareable report. No binary/source dumps are committed here.
+
+### Verification and remaining hardware step
+
+The tests simulate the documented FILE responses through the actual fragmented
+BLE path, and separately validate parsers and byte-offset reads. A synthetic
+9.6 MB WAV with trailing cues requires less than 2 KB of replies. Tests cover
+small sidecar download, true-marker jumps, unsupported commands, ignored offsets,
+truncation, wrong pages, mismatched tracks, cancellation and firmware debug frames.
+These are **software tests**, not measurements from a TP-7.
+
+No TP-7 is attached to the development computer. To establish the hardware result
+on the user's Bluefy connection: Read TP-7 → Start remote session → stop playback
+→ Test file access. If listing works, use Read selected file. Copy file test report
+exports the exact requests, acknowledgements, INIT data, listing and outcome.
+Do not infer support from the existence of this experimental UI.
+
+### Why the companion download does not preserve WAV markers
+
+Additional static verification of Android companion 1.1.4 build 54:
+
+- `EnterFileTransfer`, RVA `0xCAD560`: product command 127, opcode `0x43`,
+  track byte, folder string, filename string.
+- `RequestAudio`, RVA `0xCAD7C4`: opcode `0x46`, two uint32 arguments.
+- `DownloadMenu.OnAudioDataComplete`, RVA `0xC986F0`: interprets the response
+  as signed 16-bit samples via `WavHelper.ToFloatSamples`.
+- `FileSystem.SaveTrackAudio`, RVA `0xC94D14`: constructs a new mono, 16 kHz,
+  16-bit WaveFormat before saving the received samples. It does not preserve
+  the original file's RIFF chunk table.
+
+Thus the existing companion audio stream is not evidence of arbitrary raw-file
+access. A possible later workaround, if FILE is rejected, is to encode marker
+data as a short prepared audio carrier and decode its downloaded samples with a
+checksum. That would require an additional WAV on TP-7 and independent hardware
+validation of resampling, transfer framing and state restoration. It is not
+implemented or claimed working in this release.
 
 ## Evidence checked on 2026-11-16
 
@@ -148,8 +261,10 @@ for up to 100 tracks; storage failures do not prevent use.
   bounded data, including MIDI input that is not recognized as vendor SysEx.
   Physical cue selection
   on the device can reveal whether the companion session emits useful events.
-  Unknown event payloads remain raw. There is no opcode sweep, file transfer or firmware
-  update operation. The panel does nothing automatically upon connection.
+  Unknown event payloads remain raw. There is no opcode sweep or firmware update
+  operation. Companion controls do not transfer files; the separate FILE
+  experiment above is explicitly started by the user. Nothing is sent automatically
+  by these panels upon connection.
 - Reports stay in the browser until the user copies them. They contain firmware,
   raw protocol replies and possibly device identifiers or track information.
   The report is reset when the connection changes.

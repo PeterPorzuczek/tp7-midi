@@ -1,10 +1,10 @@
 // Read-only discovery and explicitly requested, evidenced transport commands.
-// Seeking uses the companion app's position command. Native cue enumeration
-// remains unimplemented: the companion track event does not contain markers.
+// Seeking uses the companion app's position command. Companion track events
+// contain no markers; file-panel.js separately experiments with raw FILE reads.
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 2, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null,
+    const report = { version: 3, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null,
         live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);
@@ -18,11 +18,15 @@ document.addEventListener('DOMContentLoaded', () => {
     let sessionConfirmed = false;
     let renderTimer = null;
     let fileRevision = 0;
+    let fileActive = false;
+    let fileBlocked = false;
+    let fileEpoch = 0;
 
     const fileKey = file => file ? JSON.stringify([file.folder, file.filename, file.sampleRate, file.numFrames, file.numTracks]) : null;
     const getState = () => ({ file: report.live.file ? { ...report.live.file } : null,
         positionMs: report.live.position?.positionMs ?? null,
-        connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy });
+        connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy,
+        identified, fileActive, fileBlocked, connection: generation });
 
     function renderReport() {
         if (renderTimer !== null) return;
@@ -112,6 +116,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const endpoint = isMidiConnected() ? (connectionType === 'ble' ? bleMidiCharacteristic : midiOutput) : null;
         if (endpoint !== activeEndpoint) {
             generation++;
+            fileEpoch++;
+            fileBlocked = false;
+            report.fileAccess = null;
             for (const request of pending.values()) request.reject(new Error('Connection changed. Read TP-7 again.'));
             if (notificationEndpoint) notificationEndpoint.removeEventListener('characteristicvaluechanged', onNotification);
             if (inputEndpoint) inputEndpoint.onmidimessage = null;
@@ -138,6 +145,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function receive(bytes) {
+        if (fileActive && [0xF0, 0, 0x20, 0x76, 0x19, 0x33].every((byte, i) => bytes[i] === byte)) {
+            fileBlocked = true;
+            const error = new Error('TP-7 emitted a firmware debug frame. File access stopped; restart TP-7 before another test.');
+            addEvent('file-debug-stop', { bytes: Array.from(bytes).slice(0, 512) });
+            for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(error);
+            buttons();
+            return;
+        }
         const reply = protocol.parse(bytes);
         // Bound unknown events too. Never log MIDI clock or audio payloads.
         if (!reply) {
@@ -149,9 +164,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (bytes[0] === 0xF0) addEvent('unrecognized-sysex', { bytes: Array.from(bytes).slice(0, 512) });
             return;
         }
-        addEvent('reply', { ...reply, data: reply.data.slice(0, 2048) });
-        if (reply.command === 127 && reply.status === 0) recordCompanion(reply.data, 'reply');
         const request = pending.get(reply.id);
+        // File data pages can contain a few incidental audio bytes. Record
+        // counts/page numbers, not their contents, in the shareable report.
+        addEvent('reply', request?.fileData ? { ...reply, data: reply.data.slice(0, 2), byteLength: reply.data.length, payloadOmitted: true } :
+            { ...reply, data: reply.data.slice(0, 2048) });
+        if (reply.command === 127 && reply.status === 0) recordCompanion(reply.data, 'reply');
         if (!request || reply.command !== request.command) return;
         if (reply.status === 0) request.resolve(reply);
         else if (reply.status !== 64) request.reject(Object.assign(
@@ -173,7 +191,7 @@ document.addEventListener('DOMContentLoaded', () => {
             (bytes[0] & 0xC0) === 0x80 && bytes.slice(1).every((byte, index) =>
                 index % 2 === 0 ? byte >= 128 : byte === 0xF8 || byte === 0xFE);
         if (clockOnly) bluetooth.ignoredClockPackets++;
-        else {
+        else if (!fileActive) {
             bluetooth.recentPackets.push({ time: new Date().toISOString(), bytes: Array.from(bytes).slice(0, 512) });
             if (bluetooth.recentPackets.length > 64) bluetooth.recentPackets.shift();
             renderReport();
@@ -252,6 +270,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const timer = setTimeout(() => finish(reject, new Error('No TP-7 reply within 5 seconds. The command is not confirmed.')), 5000);
             pending.set(id, {
                 command,
+                fileData: command === 5 && data[0] === 3 && data[1] === 1,
                 resolve: value => finish(resolve, value),
                 reject: error => finish(reject, error),
             });
@@ -266,6 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
         connectionChanged();
         const token = generation;
         busy = true;
+        status('Waiting for TP-7…');
         buttons();
         try {
             if (!isMidiConnected()) throw new Error('Connect TP-7 first.');
@@ -393,6 +413,37 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    window.tp7RemotePanel = { connectionChanged, getState, jumpTo };
+    function runFileTask(operation) {
+        return run(async token => {
+            if (!identified) throw new Error('Press Read TP-7 first.');
+            if (fileBlocked) throw new Error('Restart TP-7 and reconnect before another FILE test.');
+            const revision = fileRevision;
+            const epoch = ++fileEpoch;
+            fileActive = true;
+            buttons();
+            const check = () => {
+                if (token !== generation || epoch !== fileEpoch || revision !== fileRevision || !isMidiConnected()) throw new Error('File test cancelled: track or connection changed.');
+                if (fileBlocked) throw new Error('File test stopped after a firmware debug frame.');
+            };
+            try {
+                await operation(async data => {
+                    TP7FileAccess.assertReadRequest(data);
+                    check();
+                    const reply = await request(5, data, token, () => { check(); return true; });
+                    check();
+                    return reply.data;
+                }, check, summary => {
+                    check(); report.fileAccess = summary; renderReport();
+                });
+                check();
+            } finally { fileActive = false; buttons(); }
+        });
+    }
+    function cancelFileTask() {
+        if (!fileActive) return;
+        fileEpoch++;
+        for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(new Error('File test cancelled.'));
+    }
+    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runFileTask, cancelFileTask };
     connectionChanged();
 });

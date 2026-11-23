@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TP-7 MIDI</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
-    <link rel="stylesheet" href="styles.css?v=20261117-1">
+    <link rel="stylesheet" href="styles.css?v=20261123-1">
 </head>
 <body>
     <div class="container">
@@ -130,6 +130,34 @@
                     <button id="remote-copy">Copy report</button>
                     <textarea id="remote-copy-text" readonly hidden aria-label="Device report for manual copying"></textarea>
                 </details>
+            </div>
+
+            <div id="section-file-access" class="section">
+                <h2>Bluetooth File Access <small>Experimental test</small></h2>
+                <p class="remote-help">Tests an alternative TE file protocol. Support on TP-7 is unconfirmed. Use while playback is stopped, with other companion apps disconnected. Start with Read TP-7 → Start remote session in Device Access.</p>
+                <div class="remote-actions">
+                    <button id="file-probe" class="primary" disabled>Test file access</button>
+                    <button id="file-cancel" disabled>Cancel test</button>
+                </div>
+                <p id="file-status" class="remote-status" role="status" aria-live="polite"></p>
+                <label for="file-select">File exposed by TP-7</label>
+                <div class="remote-actions file-read-actions">
+                    <select id="file-select" disabled aria-label="File exposed by TP-7"></select>
+                    <button id="file-read" disabled>Read selected file</button>
+                </div>
+                <p class="remote-help">For the current WAV: read actual cue positions and stored BPM, skipping audio by byte offset. For a .cue/.json file: download up to 64 KiB. This test sends only file-list/read commands; no files or firmware are written.</p>
+                <div id="file-cues" class="dj-grid" role="group" aria-label="Cue markers read from the current WAV"></div>
+                <div id="file-cue-paging" class="dj-paging" hidden>
+                    <button id="file-cue-prev">← Previous</button>
+                    <span id="file-cue-page"></span>
+                    <button id="file-cue-next">Next →</button>
+                </div>
+                <button id="file-download" hidden>Save received file</button>
+                <details>
+                    <summary>Files reported by TP-7</summary>
+                    <pre id="file-list" tabindex="0"></pre>
+                </details>
+                <button id="file-copy">Copy file test report</button>
             </div>
 
             <div id="section-dj" class="section">
@@ -394,10 +422,12 @@
 
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
-    <script src="remote-protocol.js?v=20261117-1"></script>
-    <script src="dj-cues.js?v=20261117-1"></script>
+    <script src="remote-protocol.js?v=20261123-1"></script>
+    <script src="dj-cues.js?v=20261123-1"></script>
+    <script src="file-access.js?v=20261123-1"></script>
     <script src="app.js"></script>
-    <script src="remote-panel.js?v=20261117-1"></script>
-    <script src="dj-panel.js?v=20261117-1"></script>
+    <script src="remote-panel.js?v=20261123-1"></script>
+    <script src="dj-panel.js?v=20261123-1"></script>
+    <script src="file-panel.js?v=20261123-1"></script>
 </body>
 </html>

@@ -86,13 +86,31 @@ Each tap uses the working Stop → Set position → Play sequence. Bluetooth and
 device latency cause a playback interruption; there is no live beat quantization
 or synchronization to another deck. Existing TP-7 cues are not written or erased.
 
+## Experimental Bluetooth file access
+
+**Bluetooth File Access** tests TE's generic FILE interface over the existing
+Bluetooth/MIDI connection. Its command format comes from TE's official Sample
+Tool, but **support on TP-7 has not yet been confirmed on hardware**.
+
+In Bluefy: **Read TP-7 → Start remote session**, stop playback, disconnect other
+companion apps, then press **Test file access**. If the device returns a listing,
+choose **Read selected file**. The reader can extract actual cue/BPM metadata from
+the current WAV by skipping its audio bytes, or download a listed `.cue`/`.json`
+file up to 64 KiB. Verified WAV markers become jump buttons. The app does not
+create or write any device files. Rejected/unknown responses stop the test and
+remain in **Copy file test report**. This is a hardware experiment, not a claim
+that every TP-7 exposes a filesystem through Bluetooth.
+
+See [source evidence and test boundaries](docs/REMOTE_PROTOCOL.md#2026-11-23-alternative-file-interface).
+
 ## Device cue investigation
 
 The **TP-7 Device Access** panel reads device replies over Bluetooth or USB,
 shows the current file, length, position and playback state, and provides companion
 Resume/Stop and experimental **Jump & play** controls. Jump & play uses a
-millisecond time position. **It does not yet select existing native cues or read
-their count.** Resume does not perform the physical Play button's cue jump.
+millisecond time position. The companion events do not expose native cue positions
+or counts. The separate FILE experiment attempts to read them from the WAV.
+Resume does not perform the physical Play button's cue jump.
 The existing Cue Markers grid still addresses MIDI notes.
 
 The user confirmed manual time jumps work on TP-7 / Bluefy on 2026-11-17.

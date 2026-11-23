@@ -12,7 +12,7 @@ let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/file-access.js', '/file-panel.js']);
     server = http.createServer(async (request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         const name = pathname === '/' ? '/index.html' : pathname;
@@ -46,7 +46,32 @@ async function openApp(t, mode = 'usb') {
         window.releaseWrite = null;
         window.remoteMode = 'ok';
         window.remoteRequests = [];
+        window.fileMode = 'unsupported';
+        let fileOffset = 0;
+        let fileNode = 20;
+        let fileBytes = null;
+        const sidecarBytes = new TextEncoder().encode('FILE "example_cues_15_tempo_88.wav" WAVE\n  TRACK 01 AUDIO\n    INDEX 01 00:10:00\n');
+        const be16 = n => [n >>> 8 & 255, n & 255];
+        const be32 = n => [n >>> 24, n >>> 16 & 255, n >>> 8 & 255, n & 255];
+        const fileEntry = (id, flags, size, name) => [...be16(id), flags, ...be32(size), ...new TextEncoder().encode(name), 0];
+        function makeWave() {
+            const bytes = new Uint8Array(44 + 9600000 + 60);
+            const view = new DataView(bytes.buffer);
+            const text = (at, value) => bytes.set(new TextEncoder().encode(value), at);
+            text(0, 'RIFF'); view.setUint32(4, bytes.length - 8, true); text(8, 'WAVEfmt ');
+            view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+            view.setUint32(24, 48000, true); view.setUint32(28, 96000, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+            text(36, 'data'); view.setUint32(40, 9600000, true);
+            const cue = 44 + 9600000;
+            text(cue, 'cue '); view.setUint32(cue + 4, 52, true); view.setUint32(cue + 8, 2, true);
+            for (let i = 0; i < 2; i++) {
+                const at = cue + 12 + i * 24;
+                view.setUint32(at, i + 3, true); text(at + 8, 'data'); view.setUint32(at + 20, i ? 480024 : 0, true);
+            }
+            return bytes;
+        }
         const notificationListeners = new Set();
+        let requestDecoder = null;
         const output = {
             id: 'tp7', name: 'TP-7', state: 'connected',
             send(bytes) {
@@ -79,8 +104,8 @@ async function openApp(t, mode = 'usb') {
                     }
                     if (window.failSend) throw new Error('Test BLE failure');
                     window.bleSent.push([...packet]);
-                    if (packet.includes(0xF0)) {
-                        const decoder = new TP7RemoteProtocol.BleReceiver(bytes => {
+                    if (!requestDecoder) {
+                        requestDecoder = new TP7RemoteProtocol.BleReceiver(bytes => {
                             const fakeReply = [...bytes];
                             fakeReply[6] &= ~0x40;
                             fakeReply.splice(9, 0, 0);
@@ -89,6 +114,37 @@ async function openApp(t, mode = 'usb') {
                             if (window.remoteMode === 'silent') return;
                             let data = [];
                             let status = 0;
+                            if (request.command === 5) {
+                                if (window.fileMode === 'silent') return;
+                                if (window.fileMode === 'debug') {
+                                    const frame = [0xF0, 0, 0x20, 0x76, 0x19, 0x33, ...new TextEncoder().encode('test debug frame'), 0xF7];
+                                    for (const packet of TP7RemoteProtocol.blePackets(frame, 247)) window.emitBle(packet);
+                                    return;
+                                }
+                                if (window.fileMode === 'unsupported') status = 2;
+                                else {
+                                    fileBytes ||= makeWave();
+                                    const d = request.data;
+                                    const waveEntry = fileEntry(20, 5, fileBytes.length, 'example_cues_15_tempo_88.wav');
+                                    const sidecarEntry = fileEntry(21, 5, sidecarBytes.length, 'example_cues_15_tempo_88.cue');
+                                    if (d[0] === 1) data = [0, 0, 0, 2, 0];
+                                    else if (d[0] === 4) {
+                                        const page = d[1] * 256 + d[2];
+                                        const node = d[3] * 256 + d[4];
+                                        data = [...be16(page), ...(page ? [] : node ? [...waveEntry, ...sidecarEntry] : fileEntry(1, 6, 0, 'recordings'))];
+                                    } else if (d[0] === 3 && d[1] === 0) {
+                                        fileNode = d[2] * 256 + d[3];
+                                        fileOffset = d[4] * 16777216 + d[5] * 65536 + d[6] * 256 + d[7];
+                                        if (window.fileMode === 'ignore-offset') fileOffset = 0;
+                                        if (window.fileMode === 'change-file') window.emitTrack('other.wav');
+                                        data = fileNode === 20 ? waveEntry : sidecarEntry;
+                                    } else if (d[0] === 3 && d[1] === 1) {
+                                        const page = d[2] * 256 + d[3];
+                                        const bytes = fileNode === 20 ? fileBytes : sidecarBytes;
+                                        data = [...be16(page), ...bytes.slice(fileOffset + page * 128, fileOffset + (page + 1) * 128)];
+                                    } else throw new Error('Unexpected FILE mutation in test');
+                                }
+                            }
                             if (request.command === 1) data = [...new TextEncoder().encode('product:TP-7;sw_version:1.1.11;mode:normal;serial:test')];
                             if (request.command === 6) {
                                 if (window.remoteMode === 'reject-settings') status = 2;
@@ -127,8 +183,8 @@ async function openApp(t, mode = 'usb') {
                                     ...new TextEncoder().encode('recordings\0other.wav\0')]);
                             }
                         });
-                        decoder.push(packet);
                     }
+                    requestDecoder.push(packet);
                 } finally { window.writeInProgress = false; }
             },
         };
@@ -184,6 +240,97 @@ async function startRemote(page) {
     await page.locator('#remote-session').click();
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
 }
+
+test('FILE rejection is reported honestly, with no fallback commands or transport changes', async t => {
+    const page = await openApp(t, 'ble');
+    assert.equal(await page.locator('#file-probe').isDisabled(), true);
+    await startRemote(page);
+    await page.evaluate(() => { window.remoteRequests = []; window.bleSent = []; });
+    await page.locator('#file-probe').click();
+    await page.waitForFunction(() => document.getElementById('file-status').dataset.status === 'error');
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => [r.command, ...r.data])), [[5, 1, 0, 0, 0, 16, 0]]);
+    assert.match(await page.locator('#file-status').innerText(), /rejected FILE/);
+    assert.equal(await page.locator('#file-read').isDisabled(), true);
+    assert.equal(await page.locator('#file-cues button').count(), 0);
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).fileAccess?.result === 'unsupported');
+    assert.equal(await page.locator('#remote-play').isDisabled(), false);
+});
+
+test('FILE BLE path lists a track, reads trailing markers by offset, jumps and downloads a sidecar', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => { window.fileMode = 'ok'; window.remoteRequests = []; });
+    await page.locator('#file-probe').click();
+    await page.waitForFunction(() => !document.getElementById('file-read').disabled);
+    assert.match(await page.locator('#file-list').textContent(), /example_cues_15_tempo_88.cue/);
+    await page.locator('#file-read').click();
+    await page.waitForFunction(() => document.getElementById('file-status').textContent.startsWith('Read 2 actual WAV cue'));
+    assert.equal(await page.locator('#file-cues button').count(), 2);
+    assert.equal(await page.locator('#file-cues button').nth(1).getAttribute('data-position'), '10001');
+    await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).fileAccess?.metadata?.cues.length === 2);
+    const report = JSON.parse(await page.locator('#remote-report').textContent());
+    assert.ok(report.fileAccess.traffic.bytes < 2000);
+    assert.equal(report.fileAccess.metadata.offsetsVerified, true);
+    assert.ok(report.events.filter(e => e.kind === 'reply' && e.command === 5 && e.payloadOmitted).every(e => e.data.length === 2));
+    const dataRequests = report.events.filter(e => e.kind === 'request' && e.command === 5 && e.data[0] === 3 && e.data[1] === 1);
+    assert.ok(dataRequests.length >= 3);
+    for (const width of [320, 375, 768]) {
+        await page.setViewportSize({ width, height: 1100 });
+        assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    }
+    if (process.env.TP7_SCREENSHOT_DIR) {
+        await page.setViewportSize({ width: 375, height: 1100 });
+        await page.locator('#section-file-access details').evaluate(el => { el.open = true; });
+        await page.locator('#section-file-access').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'file-access-mobile.png') });
+    }
+    await page.evaluate(() => { window.remoteRequests = []; });
+    await page.locator('#file-cues button').nth(1).click();
+    await page.waitForFunction(() => document.getElementById('file-status').textContent.includes('jump and playback acknowledged'));
+    assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[81], [76, 17, 39, 0, 0], [80]]);
+    await page.locator('#file-select').selectOption('21');
+    await page.locator('#file-read').click();
+    await page.waitForFunction(() => !document.getElementById('file-download').hidden);
+    const saved = page.waitForEvent('download');
+    await page.locator('#file-download').click();
+    const download = await saved;
+    assert.equal(download.suggestedFilename(), 'example_cues_15_tempo_88.cue');
+    assert.match(await fs.readFile(await download.path(), 'utf8'), /INDEX 01 00:10:00/);
+});
+
+test('FILE offset and track mismatch cannot expose cue buttons, cancellation stops requests', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => { window.fileMode = 'ignore-offset'; });
+    await page.locator('#file-probe').click();
+    await page.waitForFunction(() => !document.getElementById('file-read').disabled);
+    await page.locator('#file-read').click();
+    await page.waitForFunction(() => document.getElementById('file-status').dataset.status === 'error');
+    assert.match(await page.locator('#file-status').innerText(), /offset is ignored/);
+    assert.equal(await page.locator('#file-cues button').count(), 0);
+    await page.evaluate(() => { window.fileMode = 'change-file'; });
+    await page.locator('#file-read').click();
+    await page.waitForFunction(() => !window.tp7RemotePanel.getState().busy);
+    assert.equal(await page.locator('#file-cues button').count(), 0);
+    assert.equal(await page.locator('#file-read').isDisabled(), true);
+    await page.evaluate(() => { window.fileMode = 'silent'; window.remoteRequests = []; });
+    await page.locator('#file-probe').click();
+    await page.waitForFunction(() => window.remoteRequests.length === 1);
+    await page.locator('#file-cancel').click();
+    await page.waitForFunction(() => !window.tp7RemotePanel.getState().busy);
+    assert.match(await page.locator('#file-status').innerText(), /cancelled/);
+    assert.equal(await page.evaluate(() => window.remoteRequests.length), 1);
+});
+
+test('FILE firmware debug frames stop the session and prevent retries until reconnection', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.evaluate(() => { window.fileMode = 'debug'; window.remoteRequests = []; });
+    await page.locator('#file-probe').click();
+    await page.waitForFunction(() => document.getElementById('file-status').dataset.status === 'error');
+    assert.match(await page.locator('#file-status').innerText(), /firmware debug/);
+    assert.equal(await page.locator('#file-probe').isDisabled(), true);
+    assert.equal(await page.evaluate(() => window.remoteRequests.length), 1);
+});
 
 test('DJ grid reads duration and filename BPM, then sends the exact selected position without changing speed', async t => {
     const page = await openApp(t, 'ble');

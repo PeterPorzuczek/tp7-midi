@@ -39,6 +39,12 @@
 .dj-cue[aria-current="step"] { border-color: var(--accent); background: rgba(255, 107, 53, .12); }
 .dj-paging { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 .dj-paging[hidden] { display: none; }
+.file-read-actions select {
+    flex: 1 1 180px; width: 100%; min-width: 0; min-height: 44px; padding: 8px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+}
+#file-list { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; margin: 12px 0; }
+#section-file-access details { margin: 16px 0; }
 .dj-paging label { display: flex; align-items: center; gap: 6px; font-size: .8rem; }
 #dj-page { width: 70px; }
 @media (max-width: 440px) {
