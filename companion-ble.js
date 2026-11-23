@@ -193,7 +193,7 @@ const TP7CompanionBLE = (() => {
     function readCarrier(options, codec) {
         const collector = new codec.Collector();
         return probe({ ...options, carrier: {
-            filename: codec.helperName(options.file.filename),
+            filename: codec.helperName(options.file.filename, options.helperFormat || 'cue'),
             push: (type, bytes) => collector.push(type, bytes),
             stats: () => ({ decodedSamples: collector.sampleCount, decodedBlocks: collector.blocks, pendingBlockBytes: collector.blockSize }),
             finish: expected => {

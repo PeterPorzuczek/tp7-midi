@@ -11,15 +11,16 @@ document.addEventListener('DOMContentLoaded', () => {
             status('Select the original track on TP-7, then read its prepared cue carrier.');
         }
         let helper = '';
-        try { if (remote.file) helper = codec.helperName(remote.file.filename); } catch { /* Invalid names cannot be read. */ }
+        try { if (remote.file) helper = codec.helperName(remote.file.filename, el('carrier-format').value); } catch { /* Invalid names cannot be read. */ }
         el('carrier-track').textContent = remote.file ? `${remote.file.folder}/${remote.file.filename}` : 'Waiting for the current track…';
         el('carrier-target').textContent = helper ? `Expected helper: ${remote.file.folder}/${helper}` : '';
         el('carrier-read').disabled = !!controller || remote.busy || !remote.ready || !helper || connectionType !== 'ble';
         el('carrier-cancel').disabled = !controller || controller.signal.aborted;
+        el('carrier-format').disabled = preparing || !!controller || remote.busy;
         el('carrier-test').disabled = preparing || !helper;
         el('carrier-prepare').disabled = preparing;
         el('carrier-download').disabled = !prepared || preparing;
-        for (const button of el('carrier-cues').children) button.disabled = !remote.ready || remote.busy || !!controller;
+        for (const button of el('carrier-cues').children) button.disabled = button.dataset.seekable === 'false' || !remote.ready || remote.busy || !!controller;
     }
     function renderCues() {
         el('carrier-cues').replaceChildren();
@@ -33,11 +34,13 @@ document.addEventListener('DOMContentLoaded', () => {
         for (let index = page * 32; index < Math.min(cues.length, (page + 1) * 32); index++) {
             const cue = cues[index], button = document.createElement('button');
             button.type = 'button'; button.className = 'dj-cue'; button.dataset.position = cue.positionMs;
+            button.dataset.seekable = String(cue.seekable);
             const title = document.createElement('strong'); title.textContent = `${decoded.kind === 'test' ? 'Test' : 'Cue'} ${index + 1}`;
             const time = document.createElement('span'); time.textContent = TP7DJCues.formatTime(cue.positionMs);
-            const sample = document.createElement('small'); sample.textContent = `Sample ${cue.sampleOffset}`;
+            const sample = document.createElement('small'); sample.textContent = `Sample ${cue.sampleOffset}${cue.seekable === false ? ' · end marker (no jump)' : ''}`;
             button.append(title, time, sample);
             button.addEventListener('click', async () => {
+                if (cue.seekable === false) return;
                 const selected = revision;
                 const ok = await api.jumpTo(cue.positionMs, () => selected === revision);
                 if (selected === revision) status(ok ? `Cue ${index + 1}: jump and playback acknowledged.` : el('remote-status').textContent, !ok);
@@ -51,10 +54,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const selected = revision;
         let result;
         const stages = { service: 'Opening companion Bluetooth…', identify: 'Identifying TP-7…', session: 'Stopping playback…',
-            'enter-transfer': 'Opening the helper WAV…', audio: 'Receiving cue carrier…', decode: 'Checking signal, checksum and track identity…',
+            'enter-transfer': 'Opening the companion file…', audio: 'Receiving cue carrier…', decode: 'Checking signal, checksum and track identity…',
             cleanup: 'Closing transfer and restoring remote session…' };
         const ok = await api.runCompanionTask(async (device, file, check, publish) => {
-            result = await TP7CompanionBLE.readCarrier({ device, file, check, protocol: TP7RemoteProtocol, signal: controller.signal,
+            result = await TP7CompanionBLE.readCarrier({ device, file, check, protocol: TP7RemoteProtocol, signal: controller.signal, helperFormat: el('carrier-format').value,
                 update(summary) { publish(summary); if (stages[summary.stage]) status(`${stages[summary.stage]} ${summary.audioBytes} bytes.`); } }, codec);
             return result.cleanupErrors.length === 0;
         }, { restart: true });
@@ -66,17 +69,18 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             const message = result?.cleanupErrors.length ? result.cleanupErrors.join(' ') : result?.error || el('remote-status').textContent;
             const cleanup = result?.cleanupErrors.length ? ' Transfer cleanup was not confirmed; disconnect and reconnect before playback.' : '';
-            status(`${message} No cue buttons accepted. Check that the helper WAV is in the same TP-7 folder with the exact name shown above.${cleanup}`, true);
+            status(`${message} No cue buttons accepted. Check that the companion file is in the same TP-7 folder with the exact name shown above.${cleanup}`, true);
         }
         controls();
     });
     el('carrier-cancel').addEventListener('click', () => { controller?.abort(); controls(); });
     el('carrier-copy').addEventListener('click', () => el('remote-copy').click());
+    el('carrier-format').addEventListener('change', () => { revision++; decoded = null; prepared = null; renderCues(); controls(); });
     el('carrier-prev').addEventListener('click', () => { page--; renderCues(); controls(); });
     el('carrier-next').addEventListener('click', () => { page++; renderCues(); controls(); });
 
     function prepare(source) {
-        prepared = codec.makeWave(source);
+        prepared = codec.makeWave(source, el('carrier-format').value);
         el('carrier-preparation').textContent = `${prepared.filename} · ${prepared.cueCount} ${source.kind === 'test' ? 'TEST points (0 / 10 / 20 s when inside the track)' : 'original WAV markers'} · ${prepared.seconds.toFixed(2)} s · ${Math.ceil(prepared.bytes.length / 1024)} KiB. Save and copy it next to ${source.filename} on TP-7. Select the original track when reading cues.`;
     }
     el('carrier-test').addEventListener('click', () => {
@@ -109,7 +113,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     el('carrier-download').addEventListener('click', () => {
         if (!prepared) return;
-        const url = URL.createObjectURL(new Blob([prepared.bytes], { type: 'audio/wav' }));
+        const url = URL.createObjectURL(new Blob([prepared.bytes], { type: 'application/octet-stream' }));
         const link = document.createElement('a'); link.href = url; link.download = prepared.filename; link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
     });

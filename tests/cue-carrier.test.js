@@ -22,7 +22,8 @@ test('TP-7 ADPCM uses BE predictor, three header bytes and high nibble first', (
 });
 test('WAV carrier survives downsampling, lossy ADPCM, gain, noise and all symbol phases', () => {
     const wave = carrier.makeWave(source);
-    assert.equal(wave.filename, 'prepared_128bpm.tp7-cues.wav');
+    assert.equal(wave.filename, 'prepared_128bpm.cue');
+    assert.equal(carrier.helperName(source.filename, 'legacy-wav'), 'prepared_128bpm.tp7-cues.wav');
     for (let phase = 0; phase < 40; phase++) {
         const pcm = collect(encode(resample(wave.bytes, phase, 800)));
         const decoded = carrier.decode(pcm, source);
@@ -40,6 +41,24 @@ test('maximum list and UTF-8 filename preserve sample offsets without cumulative
     assert.equal(decoded.filename, full.filename);
     assert.equal(decoded.cues[255].positionMs, Math.round(full.cues[255] * 1000 / 44100));
 });
+
+test('empty cue lists clear old markers and endpoint markers are preserved without a seek', () => {
+    const empty = { ...source, cues: [], bpm: 0.5 };
+    assert.deepEqual(carrier.decode(collect(encode(resample(carrier.makeWave(empty).bytes))), empty).cues, []);
+    const end = { ...source, numFrames: 4800000, cues: [0, 4799999, 4800000] };
+    const decoded = carrier.decode(collect(encode(resample(carrier.makeWave(end).bytes))), end);
+    assert.deepEqual(decoded.cues.map(c => c.sampleOffset), end.cues);
+    assert.deepEqual(decoded.cues.map(c => c.seekable), [true, false, false]);
+});
+
+test('v1 payload and CRC match the Windows editor golden vector', () => {
+    const data = carrier.payload({ filename: 'fixture_音.wav', sampleRate: 96000, numFrames: 192001,
+        bpm: Math.fround(127.12345), kind: 'wav', cues: [0, 96001, 192001] });
+    const framed = Buffer.alloc(2 + data.length + 4);
+    framed.writeUInt16LE(data.length); framed.set(data, 2);
+    framed.writeUInt32LE(carrier.crc32(framed.subarray(0, -4)), framed.length - 4);
+    assert.equal(framed.toString('hex'), '330001000077010001ee0200000000a0e6c75f400f0003000000666978747572655fe99fb32e776176000000000177010001ee020011f14d12');
+});
 test('CRC, malformed metadata, wrong track and truncated audio never produce markers', () => {
     assert.equal(carrier.crc32(new TextEncoder().encode('123456789')), 0xCBF43926);
     const wave = carrier.makeWave(source), pcm = resample(wave.bytes);
@@ -52,7 +71,7 @@ test('CRC, malformed metadata, wrong track and truncated audio never produce mar
     assert.throws(() => carrier.decode(corrupt, source), /checksum/);
     assert.throws(() => carrier.decode(pcm.slice(0, 9000), source), /Truncated/);
     assert.throws(() => carrier.decode(new Int16Array(16000), source), /No cue carrier/);
-    assert.throws(() => carrier.makeWave({ ...source, cues: [source.numFrames] }), /offset/);
+    assert.throws(() => carrier.makeWave({ ...source, cues: [source.numFrames + 1] }), /offset/);
     assert.throws(() => carrier.makeWave({ ...source, cues: Array(257).fill(0) }), /256/);
     assert.throws(() => carrier.makeWave({ ...source, kind: 'invented' }), /source/);
     const collector = new carrier.Collector();

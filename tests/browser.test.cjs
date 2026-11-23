@@ -284,7 +284,7 @@ async function startRemote(page) {
     await page.waitForFunction(() => !document.getElementById('remote-play').disabled);
 }
 
-test('carrier preparation downloads a test WAV; Bluetooth decoding restores the session and enables exact jumps', async t => {
+test('carrier preparation downloads a .cue; Bluetooth decoding restores the session and enables exact jumps', async t => {
     const page = await openApp(t, 'ble');
     await startRemote(page);
     await page.locator('#section-carrier summary').click();
@@ -292,7 +292,7 @@ test('carrier preparation downloads a test WAV; Bluetooth decoding restores the 
     const downloadPromise = page.waitForEvent('download');
     await page.locator('#carrier-download').click();
     const download = await downloadPromise;
-    assert.equal(download.suggestedFilename(), 'example_cues_15_tempo_88.tp7-cues.wav');
+    assert.equal(download.suggestedFilename(), 'example_cues_15_tempo_88.cue');
     const downloaded = new Uint8Array(await fs.readFile(await download.path()));
     const source = { filename: 'example_cues_15_tempo_88.wav', sampleRate: 48000, numFrames: 4800000 };
     const blocks = carrierAudio.encode(carrierAudio.resample(downloaded, 17, 500)).map(block => [...block]);
@@ -302,7 +302,7 @@ test('carrier preparation downloads a test WAV; Bluetooth decoding restores the 
     assert.match(await page.locator('#carrier-source').innerText(), /TEST points/);
     assert.equal(await page.locator('#carrier-cues button').nth(1).getAttribute('data-position'), '10000');
     const request = await page.evaluate(() => window.companionRequests.find(r => r.data[0] === 67).data);
-    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.tp7-cues.wav\0')]);
+    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.cue\0')]);
     assert.deepEqual(await page.evaluate(() => window.remoteRequests.map(r => r.data)), [[64]]); // Restore session, never auto-play.
     await page.locator('#carrier-cues button').nth(1).click();
     await page.waitForFunction(() => document.getElementById('carrier-status').textContent.includes('playback acknowledged'));
@@ -316,6 +316,30 @@ test('carrier preparation downloads a test WAV; Bluetooth decoding restores the 
     if (process.env.TP7_SCREENSHOT_DIR) await page.screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'carrier-mobile.png'), fullPage: true });
     await page.evaluate(() => window.emitTrack('other.wav'));
     assert.equal(await page.locator('#carrier-cues button').count(), 0);
+});
+
+test('legacy companion paths remain available; endpoint and empty marker lists cannot send stale jumps', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await page.locator('#carrier-format').selectOption('legacy-wav');
+    const source = { filename: 'example_cues_15_tempo_88.wav', sampleRate: 48000, numFrames: 4800000, kind: 'wav', bpm: 128, cues: [0, 4799999, 4800000] };
+    const blocks = carrierAudio.encode(carrierAudio.resample(cueCarrier.makeWave(source).bytes)).map(b => [...b]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; }, blocks);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.getElementById('carrier-source').textContent.includes('3 points'));
+    assert.equal(await page.locator('#carrier-cues button').nth(0).isDisabled(), false);
+    assert.equal(await page.locator('#carrier-cues button').nth(1).isDisabled(), true);
+    assert.equal(await page.locator('#carrier-cues button').nth(2).isDisabled(), true);
+    const request = await page.evaluate(() => window.companionRequests.find(r => r.data[0] === 67).data);
+    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.tp7-cues.wav\0')]);
+    await page.locator('#carrier-format').selectOption('cue');
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    const empty = carrierAudio.encode(carrierAudio.resample(cueCarrier.makeWave({ ...source, cues: [] }).bytes)).map(b => [...b]);
+    await page.evaluate(blocks => { window.carrierBlocks = blocks; }, empty);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.getElementById('carrier-source').textContent.includes('0 points'));
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.equal(await page.locator('#remote-play').isDisabled(), false);
 });
 
 test('carrier rejects a valid payload for a different track and cancellation restores the session', async t => {

@@ -17,9 +17,10 @@ const TP7CueCarrier = (() => {
         }
         return (crc ^ 0xFFFFFFFF) >>> 0;
     }
-    function helperName(filename) {
+    function helperName(filename, format = 'cue') {
         if (typeof filename !== 'string' || !/\.wav$/i.test(filename) || /[\0/\\]/.test(filename)) throw new Error('Expected a WAV filename without a path.');
-        const name = filename.slice(0, -4) + '.tp7-cues.wav';
+        if (!['cue', 'legacy-wav'].includes(format)) throw new Error('Unknown cue helper format.');
+        const name = filename.slice(0, -4) + (format === 'cue' ? '.cue' : '.tp7-cues.wav');
         if (encoder.encode(name).length > 255) throw new Error('The filename is too long for a cue carrier.');
         return name;
     }
@@ -27,20 +28,20 @@ const TP7CueCarrier = (() => {
         helperName(source.filename);
         if (!u32(source.sampleRate) || source.sampleRate < 8000 || source.sampleRate > 192000 || !u32(source.numFrames)) throw new Error('Invalid source WAV length or sample rate.');
         if (!['wav', 'test'].includes(source.kind)) throw new Error('Unknown cue source.');
-        if (!Array.isArray(source.cues) || !source.cues.length || source.cues.length > MAX_CUES) throw new Error(`A carrier needs 1–${MAX_CUES} cues.`);
-        if (source.bpm !== null && (!Number.isFinite(source.bpm) || source.bpm < 1 || source.bpm > 1000)) throw new Error('Invalid stored BPM.');
+        if (!Array.isArray(source.cues) || source.cues.length > MAX_CUES) throw new Error(`A carrier supports 0–${MAX_CUES} cues.`);
+        if (source.bpm !== null && (!Number.isFinite(source.bpm) || source.bpm <= 0 || source.bpm > 1000)) throw new Error('Invalid stored BPM.');
         if (expected && (source.filename !== expected.filename || source.sampleRate !== expected.sampleRate || source.numFrames !== expected.numFrames)) {
             throw new Error('Cue carrier belongs to a different track (name, sample rate or length mismatch).');
         }
         let previous = -1;
         const cues = source.cues.map(value => {
             const sampleOffset = typeof value === 'number' ? value : value.sampleOffset;
-            if (!Number.isInteger(sampleOffset) || sampleOffset < 0 || sampleOffset >= source.numFrames || sampleOffset < previous) throw new Error('Invalid or unsorted cue sample offset.');
+            if (!Number.isInteger(sampleOffset) || sampleOffset < 0 || sampleOffset > source.numFrames || sampleOffset < previous) throw new Error('Invalid or unsorted cue sample offset.');
             previous = sampleOffset;
             const rate = BigInt(source.sampleRate);
             const positionMs = Number((2n * BigInt(sampleOffset) * 1000n + rate) / (2n * rate));
-            if (positionMs > 0xFFFFFFFF || BigInt(positionMs) * rate >= BigInt(source.numFrames) * 1000n) throw new Error('Cue position is outside the remote seek range.');
-            return { sampleOffset, positionMs };
+            const seekable = positionMs <= 0xFFFFFFFF && sampleOffset < source.numFrames && BigInt(positionMs) * rate < BigInt(source.numFrames) * 1000n;
+            return { sampleOffset, positionMs, seekable };
         });
         return { filename: source.filename, sampleRate: source.sampleRate, numFrames: source.numFrames, kind: source.kind, bpm: source.bpm, cues };
     }
@@ -78,7 +79,7 @@ const TP7CueCarrier = (() => {
         view(bytes).setUint32(18 + data.length, crc32(bytes.subarray(16, 18 + data.length)), true);
         return bytes;
     }
-    function makeWave(source) {
+    function makeWave(source, format = 'cue') {
         const bytes = frame(source), sampleRate = 48000, samplesPerBit = 120, silence = 7200;
         const samples = silence * 2 + bytes.length * 8 * samplesPerBit;
         const output = new Uint8Array(44 + samples * 2), data = view(output);
@@ -92,7 +93,7 @@ const TP7CueCarrier = (() => {
             const cycles = byte & (1 << bit) ? 6 : 3;
             for (let i = 0; i < samplesPerBit; i++) data.setInt16(44 + (at++) * 2, Math.round(18000 * Math.sin(2 * Math.PI * cycles * i / samplesPerBit)), true);
         }
-        return { bytes: output, filename: helperName(source.filename), seconds: samples / sampleRate, cueCount: source.cues.length };
+        return { bytes: output, filename: helperName(source.filename, format), seconds: samples / sampleRate, cueCount: source.cues.length };
     }
 
     // libGroAudio.so dvi_adpcm_decode: 3-byte header (signed BE predictor,

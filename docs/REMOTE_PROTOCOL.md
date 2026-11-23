@@ -19,8 +19,11 @@ identifies TP-7 firmware 1.1.11, receives **4237 audio bytes, 3 DATA_FIRST and 1
 DATA_CONT packets**, and gets status 0 for all eight companion-channel requests.
 Abort receives `49 01`; transfer exit receives `45 00`; session stop receives
 `42 00`; `cleanupErrors` is empty. This validates the GATT service, request framing,
-current-track transfer and cleanup on Bluefy. It does not yet validate opening a
-different helper filename, PCM decoding, carrier recovery or native cue extraction.
+current-track transfer and cleanup on Bluefy. Subsequently the user confirmed all
+three test points were recovered from the separate `.tp7-cues.wav` helper. This
+also validates opening that helper, PCM decoding and carrier recovery. Native cue
+extraction, `.cue` extension acceptance and hiding that extension from the track
+list remain unverified.
 
 The user's latest, partially pasted report contains two complete FILE INIT
 transactions at 20:50:54 and 20:50:57 UTC. Request IDs 12 and 13 use outer command
@@ -105,7 +108,9 @@ from the app is executed or distributed with this project.
 
 ### On-disk audio and payload
 
-The helper name replaces `.wav` with `.tp7-cues.wav`, in the source track's folder.
+The helper name replaces `.wav` with `.cue`, in the source track's folder. A
+selector retains the hardware-confirmed `.tp7-cues.wav` fallback; the bytes are
+identical. `.cue` extension handling still requires a device test.
 It is mono PCM, 48 kHz, signed 16-bit, 150 ms leading/trailing silence. Bits are
 MSB first, 400 baud, using 1200 Hz for zero and 2400 Hz for one (3/6 cycles per
 120-sample symbol). At the companion's 16 kHz output each symbol is 40 samples.
@@ -123,7 +128,7 @@ Payload v1 (all multibyte numeric fields LE):
 | 6 | uint32 original frame count |
 | 10 | float64 stored BPM; zero means absent |
 | 18 | uint16 UTF-8 filename byte count |
-| 20 | uint16 cue count (1–256) |
+| 20 | uint16 cue count (0–256) |
 | 22 | two reserved zero bytes |
 | 24 | UTF-8 original filename, then uint32 cue sample offsets in time order |
 
@@ -138,6 +143,8 @@ it is not an authenticity mechanism.
 
 Each original sample offset is converted independently with integer arithmetic to
 nearest-millisecond seek position. No rounded time intervals are accumulated.
+EOF offsets are retained; a cue at EOF or rounding to EOF is marked unseekable
+and disabled in the panel. Empty lists are valid and replace previously read cues.
 Device/Bluetooth latency and the millisecond seek interface still limit playback
 accuracy. The generated waveform contains the cue data, not the original music.
 
@@ -157,8 +164,14 @@ Tests cover fixed codec vectors (header endian, nibble order, saturation), local
 WAV metadata reads without audio, all 40 symbol phases under resampling/ADPCM/noise,
 256 cues and UTF-8 names, deliberate CRC corruption, invalid lengths/identity,
 browser download → simulated BLE decoding → restored session → exact time jump,
-and cancellation. **These simulations do not establish successful carrier recovery
-on real TP-7 hardware.** The built-in test generator is the next hardware check.
+and cancellation. Hardware recovery of three points from `.tp7-cues.wav` was
+confirmed by the user; `.cue` remains a separate extension experiment.
+
+The Windows editor's `CueCarrier` emits the same v1 payload and FSK waveform.
+Both implementations share a golden length/payload/CRC vector. Editor pair-export
+tests compare the companion against the reopened WAV's filename, frame count,
+sample rate, stored float32 ACID BPM and every sample offset, including duplicates,
+EOF and empty lists. The final export name is embedded, not a source stem name.
 
 ## 2026-11-23: alternative FILE interface
 
@@ -262,8 +275,9 @@ Additional static verification of Android companion 1.1.4 build 54:
   the original file's RIFF chunk table.
 
 Thus the companion audio stream is not evidence of arbitrary raw-file access.
-The prepared carrier implemented above requires an additional WAV on TP-7; its
-end-to-end operation is still awaiting hardware validation.
+The prepared carrier requires an additional file containing WAV audio data. Its
+end-to-end operation with the `.tp7-cues.wav` filename is user-confirmed; opening
+the same content under `.cue` remains unverified.
 
 ## Evidence checked on 2026-11-16
 

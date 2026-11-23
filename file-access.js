@@ -210,10 +210,10 @@ const TP7FileAccess = (() => {
         if (expected !== null && (format.sampleRate !== expected.sampleRate || numFrames !== expected.numFrames)) throw new Error('WAV sample rate or length does not match the current TP-7 track.');
         const ids = new Set();
         const cues = (cueRecords || []).map(cue => {
-            if (ids.has(cue.id) || cue.sampleOffset >= numFrames) throw new Error('Duplicate or out-of-track WAV cue.');
+            if (ids.has(cue.id) || cue.sampleOffset > numFrames || (expected !== null && cue.sampleOffset === numFrames)) throw new Error('Duplicate or out-of-track WAV cue.');
             ids.add(cue.id);
             const positionMs = Number((2n * BigInt(cue.sampleOffset) * 1000n + BigInt(format.sampleRate)) / (2n * BigInt(format.sampleRate)));
-            if (positionMs * format.sampleRate >= numFrames * 1000) throw new Error('WAV cue rounds to the file endpoint.');
+            if (expected !== null && positionMs * format.sampleRate >= numFrames * 1000) throw new Error('WAV cue rounds to the file endpoint.');
             return { ...cue, positionMs };
         }).sort((a, b) => a.sampleOffset - b.sampleOffset || a.id - b.id);
         return { sampleRate: format.sampleRate, numFrames, bpm, cues, chunks, offsetsVerified: reader.offsetsVerified };
