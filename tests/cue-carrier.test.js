@@ -85,6 +85,25 @@ test('txt is an explicit filename experiment with identical encoded audio and st
     assert.throws(() => carrier.decode(pcm, { ...source, filename: 'renamed.wav' }), /stored: prepared_128bpm.wav.*selected: renamed.wav.*Regenerate/);
 });
 
+test('arbitrary exported basenames keep their matching helper and embedded identity', () => {
+    for (const filename of ['Set 04 - noc 127.5.wav', 'żółć_音楽.final.v2.WAV', 'a.b.c.wav']) {
+        const recording = { ...source, filename };
+        const wave = carrier.makeWave(recording);
+        assert.equal(wave.filename, filename.slice(0, -4) + '.cue');
+        assert.equal(carrier.decode(resample(wave.bytes), recording).filename, filename);
+    }
+});
+
+test('active cue follows real positions, boundaries, backward jumps, duplicate times and EOF', () => {
+    const recording = carrier.validate({ ...source, numFrames: 480000, cues: [48000, 96000, 96001, 479999, 480000] });
+    for (const [position, expected] of [[null, -1], [-1, -1], [0, -1], [999, -1], [1000, 0], [1999, 0],
+        [2000, 2], [9999, 2], [10000, -1], [1200, 0], [undefined, -1], [NaN, -1]]) {
+        assert.equal(carrier.activeCueIndex(recording, position), expected, `position ${position}`);
+    }
+    assert.equal(carrier.activeCueIndex({ ...recording, cues: [] }, 4000), -1);
+    assert.equal(carrier.activeCueIndex(null, 0), -1);
+});
+
 test('empty cue lists clear old markers and endpoint markers are preserved without a seek', () => {
     const empty = { ...source, cues: [], bpm: 0.5 };
     assert.deepEqual(carrier.decode(collect(encode(resample(carrier.makeWave(empty).bytes))), empty).cues, []);

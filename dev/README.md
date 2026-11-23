@@ -38,6 +38,11 @@ acknowledgements, unsupported settings, notification failure and session timeout
 They cover unsolicited companion notifications, position/file parsing, exact
 millisecond seek encoding, failed seeks, and cancellation when the track changes.
 They do not validate native cue navigation; see [REMOTE_PROTOCOL.md](../docs/REMOTE_PROTOCOL.md).
+Prepared-cue tests also cover arbitrary Unicode filenames, automatic loading only
+after confirmed Stop, one attempt per track selection, manual retry, cancellation
+on track change, preference persistence, and real-position highlighting across
+forward/backward jumps, stale notifications, EOF and page boundaries. These are
+simulated transport checks; hardware validation of the UI still uses Bluefy/TP-7.
 
 For a hardware check, use a known constant-BPM recording, native playback with
 on-device SPD=1× and external clock sync disabled. Measure recorded output against

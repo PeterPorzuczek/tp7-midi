@@ -37,10 +37,14 @@ after(async () => {
     await new Promise(resolve => server ? server.close(resolve) : resolve());
 });
 
-async function openApp(t, mode = 'usb') {
+async function openApp(t, mode = 'usb', autoLoad = false) {
     const context = await browser.newContext();
     t.after(() => context.close());
-    await context.addInitScript(mode => {
+    await context.addInitScript(({ mode, autoLoad }) => {
+        // Existing transport tests opt out of background reads; auto-load tests enable it explicitly.
+        if (localStorage.getItem('tp7-carrier-preferences-v1') === null) {
+            localStorage.setItem('tp7-carrier-preferences-v1', JSON.stringify({ autoLoad, follow: true, format: 'cue' }));
+        }
         window.sent = [];
         window.bleSent = [];
         window.failSend = false;
@@ -177,8 +181,7 @@ async function openApp(t, mode = 'usb') {
                                 window.emitCompanion([77, ...request.data.slice(1)]);
                             }
                             if (request.command === 127 && request.data[0] === 64) {
-                                window.emitCompanion([75, 128, 187, 0, 0, 0, 62, 73, 0, 5, 26, 11, 16, 22, 35, 0,
-                                    ...new TextEncoder().encode('recordings\0example_cues_15_tempo_88.wav\0')]);
+                                window.emitTrack(window.mockTrack?.filename || 'example_cues_15_tempo_88.wav', window.mockTrack?.numFrames || 4800000);
                                 window.emitCompanion([77, 227, 134, 0, 0]);
                             }
                             if (request.command === 127 && request.data[0] === 81 && window.changeFileOnStop) {
@@ -204,6 +207,7 @@ async function openApp(t, mode = 'usb') {
             for (const fragment of TP7RemoteProtocol.blePackets(frame, 247)) window.emitBle(fragment);
         };
         window.emitTrack = (filename, numFrames = 7832495) => {
+            window.mockTrack = { filename, numFrames };
             const bytes = new Uint8Array(8);
             const view = new DataView(bytes.buffer);
             view.setUint32(0, 48000, true); view.setUint32(4, numFrames, true);
@@ -258,7 +262,7 @@ async function openApp(t, mode = 'usb') {
             } },
         };
         Object.defineProperty(navigator, 'bluetooth', { value: { requestDevice: async options => { window.bluetoothOptions = options; return device; } } });
-    }, mode);
+    }, { mode, autoLoad });
     const page = await context.newPage();
     page.setDefaultTimeout(8000);
     const errors = [];
@@ -318,6 +322,136 @@ test('carrier preparation downloads a .cue; Bluetooth decoding restores the sess
     assert.equal(await page.locator('#carrier-cues button').count(), 0);
 });
 
+async function carrierFixture(page, filename, cues, numFrames = 4800000) {
+    const source = { filename, sampleRate: 48000, numFrames, kind: 'wav', bpm: 128, cues };
+    const blocks = carrierAudio.encode(carrierAudio.resample(cueCarrier.makeWave(source).bytes)).map(b => [...b]);
+    await page.evaluate(({ filename, numFrames, blocks }) => {
+        window.carrierBlocks = blocks; window.emitTrack(filename, numFrames);
+    }, { filename, numFrames, blocks });
+}
+
+async function reportPosition(page, ms, playing = true) {
+    await page.evaluate(({ ms, playing }) => {
+        window.emitCompanion([78, Number(playing)]);
+        window.emitCompanion([77, ms & 255, ms >>> 8 & 255, ms >>> 16 & 255, ms >>> 24]);
+    }, { ms, playing });
+}
+
+test('auto-load matches arbitrary exported names, waits for Stop and loads only once per selection', async t => {
+    const page = await openApp(t, 'ble', true);
+    await startRemote(page);
+    const filename = 'Set 04 - żółć_音楽.final.v2.WAV';
+    await carrierFixture(page, filename, [0, 480000, 960000]);
+    await page.waitForTimeout(350);
+    assert.equal(await page.evaluate(() => window.companionRequests.length), 0); // Unknown playback is not Stop.
+    await reportPosition(page, 1000);
+    await page.waitForTimeout(350);
+    assert.equal(await page.evaluate(() => window.companionRequests.length), 0); // Do not interrupt music.
+    await page.locator('#remote-stop').click();
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 3);
+    assert.match(await page.locator('#carrier-target').innerText(), /Set 04 - żółć_音楽.final.v2.cue/);
+    const request = await page.evaluate(() => window.companionRequests.find(r => r.data[0] === 67).data);
+    assert.deepEqual(request, [67, 0, ...new TextEncoder().encode(`recordings\0${filename.slice(0, -4)}.cue\0`)]);
+    await reportPosition(page, 1000, false);
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => window.companionRequests.filter(r => r.data[0] === 67).length), 1);
+    assert.equal(await page.evaluate(() => window.remoteRequests.some(r => r.data[0] === 80)), false);
+    await carrierFixture(page, 'Another song 95bpm.wav', [0, 240000]);
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.equal(await page.evaluate(() => window.tp7RemotePanel.getState().playing), null);
+    await page.waitForTimeout(350);
+    assert.equal(await page.evaluate(() => window.companionRequests.filter(r => r.data[0] === 67).length), 1);
+    await reportPosition(page, 0, false);
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 2);
+    assert.equal(await page.evaluate(() => window.companionRequests.filter(r => r.data[0] === 67).length), 2);
+    await page.locator('#carrier-auto').uncheck();
+    await page.locator('#carrier-follow').uncheck();
+    await page.reload();
+    assert.equal(await page.locator('#carrier-auto').isChecked(), false);
+    assert.equal(await page.locator('#carrier-follow').isChecked(), false);
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+});
+
+test('auto-load failure does not loop; manual retry works and a changed track cancels a pending transfer', async t => {
+    const page = await openApp(t, 'ble', true);
+    await startRemote(page);
+    await carrierFixture(page, 'wrong.wav', [0, 480000]);
+    await page.evaluate(() => window.emitTrack('selected.wav', 4800000));
+    await reportPosition(page, 0, false);
+    await page.waitForFunction(() => document.getElementById('carrier-status').dataset.status === 'error');
+    assert.match(await page.locator('#carrier-status').innerText(), /different track/);
+    await reportPosition(page, 0, false);
+    await page.waitForTimeout(400);
+    assert.equal(await page.evaluate(() => window.companionRequests.filter(r => r.data[0] === 67).length), 1);
+    await carrierFixture(page, 'selected.wav', [0, 480000]);
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 2);
+    await page.evaluate(() => { window.companionMode = 'silent'; window.companionRequests = []; window.emitTrack('pending.wav'); });
+    await reportPosition(page, 0, false);
+    await page.waitForFunction(() => window.companionRequests.some(r => r.data[0] === 70));
+    await page.evaluate(() => window.emitTrack('new selection.wav'));
+    await page.waitForFunction(() => !window.tp7RemotePanel.getState().busy);
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    assert.match(await page.locator('#carrier-track').innerText(), /new selection.wav/);
+    assert.equal(await page.evaluate(() => window.remoteRequests.some(r => r.data[0] === 80)), false);
+});
+
+test('loaded cues follow device positions, page changes and staleness without optimistic highlights', async t => {
+    const page = await openApp(t, 'ble');
+    await startRemote(page);
+    await carrierFixture(page, 'DJ set - żółć.final.v2.wav', Array.from({ length: 40 }, (_, i) => i * 96000));
+    await page.locator('#carrier-read').click();
+    await page.waitForFunction(() => document.querySelectorAll('#carrier-cues button').length === 32);
+    const current = page.locator('#carrier-cues [aria-current="step"]');
+    const next = page.locator('#carrier-cues .is-next');
+    await reportPosition(page, 6000);
+    assert.equal(await current.getAttribute('data-index'), '3');
+    assert.equal(await next.getAttribute('data-index'), '4');
+    assert.match(await current.innerText(), /PLAYING/);
+    await page.evaluate(() => { window.remoteMode = 'reject-seek'; });
+    await page.locator('#carrier-cues button').nth(5).click();
+    await page.waitForFunction(() => document.getElementById('carrier-status').dataset.status === 'error');
+    assert.equal(await current.getAttribute('data-index'), '3');
+    assert.match(await current.innerText(), /CURRENT POSITION/);
+    await reportPosition(page, 66000);
+    assert.equal(await page.locator('#carrier-page').innerText(), '2 / 2');
+    assert.equal(await current.getAttribute('data-index'), '33');
+    await page.locator('#carrier-prev').click();
+    await reportPosition(page, 66500);
+    assert.equal(await page.locator('#carrier-page').innerText(), '1 / 2'); // Browsing does not snap back on every packet.
+    await reportPosition(page, 68000);
+    assert.equal(await page.locator('#carrier-page').innerText(), '2 / 2');
+    await page.locator('#carrier-follow').uncheck();
+    await page.locator('#carrier-prev').click();
+    await reportPosition(page, 70000);
+    assert.equal(await page.locator('#carrier-page').innerText(), '1 / 2');
+    await page.locator('#carrier-follow').check();
+    assert.equal(await current.getAttribute('data-index'), '35');
+    await reportPosition(page, 2000, false);
+    await page.waitForTimeout(3500);
+    assert.equal(await current.getAttribute('data-index'), '1'); // A confirmed stopped position is stable.
+    await reportPosition(page, 2000);
+    await page.waitForFunction(() => !document.querySelector('#carrier-cues [aria-current]'), undefined, { timeout: 5000 });
+    assert.equal(await next.count(), 0);
+    assert.match(await page.locator('#carrier-live').innerText(), /fresh TP-7 position/);
+    await reportPosition(page, 100000);
+    assert.equal(await current.count(), 0); // EOF is not the last playing section.
+    await reportPosition(page, 2000);
+    assert.equal(await current.getAttribute('data-index'), '1');
+    for (const width of [320, 375, 768]) {
+        await page.setViewportSize({ width, height: 1000 });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+    await page.setViewportSize({ width: 375, height: 1000 });
+    if (process.env.TP7_SCREENSHOT_DIR) await page.locator('#section-carrier').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'active-cues-mobile.png') });
+    await page.evaluate(() => window.emitTrack('other.wav'));
+    assert.equal(await current.count(), 0);
+    assert.equal(await next.count(), 0);
+    assert.equal(await page.locator('#carrier-cues button').count(), 0);
+    await page.evaluate(() => { bleDevice.gatt.connected = false; onBLEDisconnected(); });
+    assert.equal(await page.locator('#carrier-read').isDisabled(), true);
+});
+
 test('legacy companion paths remain available; endpoint and empty marker lists cannot send stale jumps', async t => {
     const page = await openApp(t, 'ble');
     await startRemote(page);
@@ -359,7 +493,7 @@ test('natural completion with an omitted tail reports truncation; padded txt hel
     assert.equal(await page.locator('#carrier-cues button').count(), 0);
     await page.waitForFunction(() => JSON.parse(document.getElementById('remote-report').textContent).companionAccess?.stage === 'done');
     const report = JSON.parse(await page.locator('#remote-report').textContent());
-    assert.equal(report.version, 6);
+    assert.equal(report.version, 7);
     assert.equal(report.companionAccess.audioComplete, true);
     assert.ok(report.companionAccess.decoder.missingSamples > 0);
     assert.ok(report.companionAccess.decoder.requiredSamples > report.companionAccess.decoder.receivedSamples);

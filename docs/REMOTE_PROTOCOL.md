@@ -21,9 +21,9 @@ Abort receives `49 01`; transfer exit receives `45 00`; session stop receives
 `42 00`; `cleanupErrors` is empty. This validates the GATT service, request framing,
 current-track transfer and cleanup on Bluefy. Subsequently the user confirmed all
 three test points were recovered from the separate `.tp7-cues.wav` helper. This
-also validates opening that helper, PCM decoding and carrier recovery. Native cue
-extraction, `.cue` extension acceptance and hiding that extension from the track
-list remain unverified.
+also validates opening that helper, PCM decoding and carrier recovery. On
+2026-11-24 the user confirmed the padded `.cue` helper works as well. Native cue
+extraction and hiding helper extensions from the track list remain unverified.
 
 The user's latest, partially pasted report contains two complete FILE INIT
 transactions at 20:50:54 and 20:50:57 UTC. Request IDs 12 and 13 use outer command
@@ -118,8 +118,8 @@ exact truncation failure, consistent with the firmware omitting a partial block.
 This is an inference from the report and local reproduction, not firmware source.
 New generators keep 150 ms leading silence, add at least one second of trailing
 silence, and round total duration up to a 250 ms block boundary. Payload v1 is
-unchanged; old complete helpers still decode. Device validation of the padded
-helper and `.txt` extension remains outstanding.
+unchanged; old complete helpers still decode. The user confirmed the padded
+`.cue` helper works on 2026-11-24; `.txt` remains an extension experiment.
 The file is mono PCM, 48 kHz, signed 16-bit. Bits are
 MSB first, 400 baud, using 1200 Hz for zero and 2400 Hz for one (3/6 cycles per
 120-sample symbol). At the companion's 16 kHz output each symbol is 40 samples.
@@ -175,12 +175,28 @@ No missing bits or cue offsets are guessed. CRC and track identity remain mandat
 After a rename, regenerate from the WAV under its final filename; changing a helper's
 filesystem name cannot update the filename stored in its payload.
 
+Report version 7 accompanies automatic per-track loading and live cue sections.
+The panel derives the helper from the exact current filename (including spaces,
+Unicode and multiple dots) and selected extension. Auto-load runs once per track
+selection after a confirmed stopped playback event; unknown/playing states wait,
+and failure requires a manual retry. It does not automatically resume playback.
+Track/connection changes cancel pending loads and clear the old markers.
+
+Live highlighting uses the last seekable marker at or before the reported
+millisecond position. Equal rounded positions select the last marker; EOF has no
+active section. Playback/position are invalidated at track change and transfer
+start. During playback, positions older than three seconds are not highlighted;
+confirmed stopped positions can remain selected. No BPM-based extrapolation is
+used. The next later marker gets a separate badge. Optional page following moves
+only when the active cue changes, allowing manual browsing between cue changes.
+
 Tests cover fixed codec vectors (header endian, nibble order, saturation), local
 WAV metadata reads without audio, all 40 symbol phases under resampling/ADPCM/noise,
 256 cues and UTF-8 names, deliberate CRC corruption, invalid lengths/identity,
 browser download → simulated BLE decoding → restored session → exact time jump,
-and cancellation. Hardware recovery of three points from `.tp7-cues.wav` was
-confirmed by the user; `.cue` remains a separate extension experiment.
+and cancellation. Hardware recovery from both `.tp7-cues.wav` and padded `.cue`
+helpers was confirmed by the user. Automatic loading and live highlighting have
+browser transport simulations; their device/UI validation remains separate.
 
 The Windows editor's `CueCarrier` emits the same v1 payload and FSK waveform.
 Both implementations share a golden length/payload/CRC vector. Editor pair-export
@@ -291,8 +307,7 @@ Additional static verification of Android companion 1.1.4 build 54:
 
 Thus the companion audio stream is not evidence of arbitrary raw-file access.
 The prepared carrier requires an additional file containing WAV audio data. Its
-end-to-end operation with the `.tp7-cues.wav` filename is user-confirmed; opening
-the same content under `.cue` remains unverified.
+end-to-end operation with `.tp7-cues.wav` and padded `.cue` helpers is user-confirmed.
 
 ## Evidence checked on 2026-11-16
 

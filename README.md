@@ -93,32 +93,51 @@ file over Bluetooth in Bluefy on TP-7 1.1.11. A later report accepted `.cue` and
 received audio but stopped after 11 complete 4000-sample blocks (2.75 seconds),
 truncating a 2.94-second helper. This exact failure is reproduced in the tests.
 New helpers include at least one second of trailing silence and align to 250 ms
-blocks so the cue data and CRC precede the potentially omitted tail. **The padded
-helper still needs device validation; hiding it from TP-7's track list is not confirmed.**
+blocks so the cue data and CRC precede the potentially omitted tail. The user
+confirmed that the padded `.cue` helper works on the device. Hiding every helper
+extension from TP-7's track list is not confirmed.
 This does not read the native marker
 table or change the recorder's native CUE selection.
 
 Prepare once, when loading music onto TP-7:
 
 1. In [TP-7 WAV Editor for Windows](https://github.com/PeterPorzuczek/tp7-wav-editor-win),
-   use version **1.3.1 or newer**, and leave **Export matching .cue companion** checked. Export writes `track.wav`
-   and `track.cue` from the same snapshot, including multitrack exports. Alternatively,
+   use version **1.3.1 or newer**, and leave **Export matching .cue companion** checked.
+   Choose any final filename: exporting `My song.wav` also writes `My song.cue`
+   from the same snapshot, including multitrack exports. Spaces, Unicode characters
+   and multiple dots are preserved. Alternatively,
    use **Prepare a cue companion once → Prepare from WAV cues** here and choose
    **Save companion file**. This reads headers/markers locally, skipping audio.
 2. Copy both files to the same TP-7 folder using your normal music-transfer method.
-   Select **track.cue** in this panel. If TP-7 rejects that extension, rename only
-   the companion to `track.tp7-cues.wav` and select **older exports** here. That
+   Select **Same track name + .cue** in this panel. The expected helper name follows
+   the current TP-7 track automatically. If TP-7 rejects that extension, rename only
+   the companion to `My song.tp7-cues.wav` and select **Same track name + .tp7-cues.wav** here. That
    fallback works on hardware but appears as another audio track. Keep the original
    WAV filename and companion audio unchanged. The web app does not upload files.
-   An experimental **track.txt (extension test)** option prepares and reads the
+   An experimental **Same track name + .txt (extension test)** option prepares and reads the
    same audio under `.txt`; it does not implement plain-text Bluetooth transfer.
    Use the final WAV filename before preparation: renaming both exported files
    does not update the filename embedded inside the companion.
 3. In Bluefy, select **the original music track** on TP-7, connect, **Read TP-7 →
-   Start remote session → Read cue carrier**. The app requests the helper by name,
+   Start remote session**. **Auto-load when stopped** is enabled by default: once
+   TP-7 confirms Stop, the app reads the matching helper once per track selection.
+   While playing, it waits; if playback is unknown, press **Native Stop**. You can
+   also use **Read cue carrier** to read immediately or retry a failed read.
+   The app requests the helper by name,
    checks its signal, CRC and source identity, then shows cue buttons. Playback is
    stopped during reading; the remote session is restored automatically after
    acknowledged cleanup. Tapping a cue uses the existing Stop → Seek → Play path.
+
+The current cue section is green with **PLAYING** while TP-7 reports playback;
+the next marker is blue with **NEXT**. When stopped, the current marker says
+**CURRENT POSITION**. Highlighting follows actual device position notifications,
+including physical jumps and backward seeks, rather than estimating time from
+BPM or treating a button click as a successful jump. Without fresh positions for
+three seconds during playback, the highlight clears until another report arrives.
+No marker is active at the file end. **Follow current cue page** changes the page
+when playback enters a section on another page; it can be disabled for browsing.
+These preferences and the helper extension are saved locally. Track changes and
+disconnects clear old cues, and failed automatic reads require a manual retry.
 
 For a first hardware test without the original WAV on hand, **Prepare 0 / 10 / 20 s
 test** creates a helper for the currently observed track. These are explicitly

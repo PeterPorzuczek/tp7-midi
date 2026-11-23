@@ -205,6 +205,18 @@ const TP7CueCarrier = (() => {
         if (crc32(protectedBytes) !== view(checksum).getUint32(0, true)) throw new Error('Cue carrier checksum failed; no markers accepted.');
         return { ...parsePayload(protectedBytes.subarray(2), expected), checksum: view(checksum).getUint32(0, true).toString(16).padStart(8, '0') };
     }
-    return { helperName, validate, payload, parsePayload, makeWave, decodeBlock, Collector, decode, crc32, MAX_CUES };
+    function activeCueIndex(source, positionMs) {
+        if (!source || !Number.isInteger(positionMs) || positionMs < 0 ||
+            positionMs * source.sampleRate >= source.numFrames * 1000) return -1;
+        let index = -1;
+        // Last marker at/before the reported position owns the section. Equal
+        // millisecond offsets select the last seekable cue; EOF markers never play.
+        for (let i = 0; i < source.cues.length; i++) {
+            if (source.cues[i].positionMs > positionMs) break;
+            if (source.cues[i].seekable !== false) index = i;
+        }
+        return index;
+    }
+    return { helperName, validate, payload, parsePayload, makeWave, decodeBlock, Collector, decode, crc32, activeCueIndex, MAX_CUES };
 })();
 if (typeof module !== 'undefined' && module.exports) module.exports = TP7CueCarrier;

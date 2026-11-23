@@ -4,7 +4,7 @@
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 6, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
+    const report = { version: 7, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
         live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);
@@ -21,10 +21,13 @@ document.addEventListener('DOMContentLoaded', () => {
     let fileActive = false;
     let fileBlocked = false;
     let fileEpoch = 0;
+    let positionReceivedAt = null;
 
     const fileKey = file => file ? JSON.stringify([file.folder, file.filename, file.sampleRate, file.numFrames, file.numTracks]) : null;
     const getState = () => ({ file: report.live.file ? { ...report.live.file } : null,
         positionMs: report.live.position?.positionMs ?? null,
+        playing: report.live.playback?.playing ?? null,
+        positionAgeMs: positionReceivedAt === null ? null : Math.max(0, performance.now() - positionReceivedAt),
         connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy,
         identified, fileActive, fileBlocked, fileUnsupported: report.fileAccess?.result === 'unsupported', connection: generation });
 
@@ -60,6 +63,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function resetLive() {
         fileRevision++;
+        positionReceivedAt = null;
         report.live = { file: null, position: null, playback: null };
         report.positionSamples = [];
         showLive();
@@ -70,6 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!decoded) return false;
         const time = new Date().toISOString();
         if (decoded.type === 'position') {
+            positionReceivedAt = performance.now();
             const sample = { time, positionMs: decoded.positionMs };
             report.live.position = sample;
             report.positionSamples.push(sample);
@@ -83,6 +88,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (fileKey(previous) !== fileKey(decoded)) {
                     fileRevision++;
                     report.live.position = null;
+                    report.live.playback = null;
+                    positionReceivedAt = null;
                     report.positionSamples = [];
                 }
                 report.live.file = { time, ...decoded };
@@ -457,6 +464,12 @@ document.addEventListener('DOMContentLoaded', () => {
             const revision = fileRevision;
             let clean = false;
             window.tp7CompanionBusy = true;
+            // A companion transfer takes over transport and may move its position.
+            // Resume highlighting only from new remote-session notifications.
+            report.live.position = null;
+            report.live.playback = null;
+            positionReceivedAt = null;
+            showLive(); renderReport();
             try {
                 await bleWriteQueue;
                 const check = () => {
