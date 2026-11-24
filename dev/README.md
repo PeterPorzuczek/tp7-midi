@@ -10,28 +10,28 @@ The production app is still plain HTML/CSS/JS with no build step. Deploy the roo
 files together, including the tempo, local WAV cue reader, companion transfer, remote session
 and cue/grid panel scripts, to GitHub Pages.
 
-Run the arithmetic and WAV metadata tests with Node.js 20 or newer:
+Install the pinned development dependencies with Node.js 20 or newer:
 
 ```sh
-node --test tests/tempo.test.js tests/remote-protocol.test.js tests/dj-cues.test.js tests/wav-cues.test.js tests/companion-ble.test.js tests/cue-carrier.test.js
-```
-
-They cover every representable pitch, exact half-step boundaries, an independent
-exhaustive nearest-value check, invalid/out-of-range BPM, metadata corruption and
-skipping large audio payloads.
-
-Optional browser integration tests use Playwright with simulated USB/BLE devices:
-
-```sh
-npm install --no-save --package-lock=false playwright
+npm ci
+npm test
 npx playwright install chromium
-node --test tests/browser.test.cjs
+npm run test:browser
 ```
+
+`npm test` runs arithmetic, metadata, packet and codec tests. They cover every
+representable pitch, exact half-step boundaries, an independent exhaustive
+nearest-value check, invalid/out-of-range BPM, metadata corruption and skipping
+large audio payloads. `npm run test:browser` uses simulated USB/BLE devices.
+There are no runtime npm dependencies or production build step.
+
+The GitHub Actions workflow runs both suites with Node.js 24 and Chromium on
+pull requests and pushes. It needs only read access to repository contents.
 
 Set `TP7_BROWSER_PATH` to an installed Chromium/Edge executable to use it instead
 of Playwright's bundled browser. `TP7_SCREENSHOT_DIR` optionally saves desktop and
 mobile screenshots. These tests cover MIDI packets, retries, disconnection,
-cancellation of stale queued commands, reload/persistence, WAV loading and layout.
+cancellation of stale queued commands, reload/persistence, cue BPM loading and layout.
 They never access a real MIDI device and do not validate TP-7's speed curve.
 The remote-panel tests also simulate fragmented BLE SysEx, successful device
 acknowledgements, opt-in listening, notification failure and session timeout.

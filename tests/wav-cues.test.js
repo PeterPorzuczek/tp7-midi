@@ -35,3 +35,13 @@ test('local reader rejects truncated files, bad chunk lengths and out-of-track m
         await assert.rejects(files.readWave(reader(bytes), bytes.length, kind === 'identity' ? { sampleRate: 44100, numFrames: 4800000 } : null));
     }
 });
+
+test('conflicting valid BPM chunks cannot silently change the exported tempo', async () => {
+    const original = wave();
+    const duplicate = original.subarray(original.length - 32);
+    const bytes = Buffer.concat([original, duplicate]);
+    bytes.writeUInt32LE(bytes.length - 8, 4);
+    assert.equal((await files.readWave(reader(bytes), bytes.length)).bpm, 127.5);
+    bytes.writeFloatLE(128, bytes.length - 4);
+    await assert.rejects(files.readWave(reader(bytes), bytes.length), /Conflicting BPM/);
+});

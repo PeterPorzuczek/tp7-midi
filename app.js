@@ -806,13 +806,6 @@ document.addEventListener('DOMContentLoaded', () => {
     createGainControls();
     createCueButtons();
 
-    const mixerToggle = document.getElementById('mixer-enabled');
-    mixerToggle.checked = false;
-    document.getElementById('mixer-content').hidden = true;
-    mixerToggle.addEventListener('change', () => {
-        document.getElementById('mixer-content').hidden = !mixerToggle.checked;
-    });
-
     let tempoTrack = null, tempoSourceKind = 'none', cueReadPending = false;
     const sourceInput = document.getElementById('tempo-source');
     const sourceInfo = document.getElementById('tempo-source-info');

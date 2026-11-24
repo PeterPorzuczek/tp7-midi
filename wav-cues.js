@@ -49,7 +49,10 @@ const TP7WavCues = (() => {
             } else if (name === 'acid' && length >= 24) {
                 const data = view(await read(body, 24));
                 const tempo = data.getFloat32(20, true);
-                if (Number.isFinite(tempo) && tempo >= 1 && tempo <= 1000) bpm = tempo;
+                if (Number.isFinite(tempo) && tempo >= 1 && tempo <= 1000) {
+                    if (bpm !== null && bpm !== tempo) throw new Error('Conflicting BPM values in WAV metadata.');
+                    bpm = tempo;
+                }
             }
             offset = next;
         }

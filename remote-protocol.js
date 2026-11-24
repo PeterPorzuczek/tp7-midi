@@ -1,5 +1,6 @@
 // TE SysEx envelope, verified against TE's web updater. Companion
-// session/transport opcodes have separate experimental evidence. Position commands and events were checked against the companion
+// session/transport opcodes have separate experimental evidence.
+// Position commands and events were checked against the companion
 // Android app. No native cue-list/selection opcode has been established.
 const TP7RemoteProtocol = (() => {
     const MAX_MESSAGE = 65536;

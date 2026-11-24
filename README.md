@@ -81,14 +81,13 @@ References: [official MIDI reference](https://teenage.engineering/guides/tp-7#mi
    **CURRENT POSITION** while stopped); the next cue is blue (**NEXT**).
 
 Cue mode is off on page load. Turning it off cancels pending work and clears the
-current markers and their BPM. There are no settings/FILE probes, audio diagnostic
-panels, raw reports or manual seconds-based jump controls in the app.
+current markers and their BPM.
 
 The cue file contains the original filename, sample rate, frame count, marker
 sample offsets and optional BPM from the same export snapshot. It is an encoded
 audio companion, not a text CUE sheet. Signal, checksum and track identity must
-validate before any cue or BPM is accepted. The user has confirmed this workflow
-and live highlighting on TP-7 1.1.11 with Bluefy. It does not change TP-7's native
+validate before any cue or BPM is accepted. Cue loading and live highlighting
+have been checked on TP-7 1.1.11 with Bluefy. It does not change TP-7's native
 CUE selection or synchronize edits subsequently made on the device.
 
 **Cue file options** contains auto-load and the legacy `.tp7-cues.wav` extension.
@@ -107,11 +106,10 @@ including physical jumps and backward seeks. During playback, missing positions
 for three seconds clear the highlight until data resumes. **Follow current cue
 page** follows section changes and can be disabled for browsing.
 
-## Optional generated grid
+**Track Mixer** stays visible directly below Track cues, with its faders, mutes
+and actions ready to use.
 
-**Track Mixer** sits directly below Track cues. It starts collapsed; check
-**Show track mixer** to reveal its faders, mutes and actions. Collapsing it keeps
-the current mixer settings and sends no MIDI commands.
+## Optional generated grid
 
 In cue mode, check **Show generated beat / bar grid** to reveal **DJ Jump Grid**.
 The grid is neither shown nor calculated while unchecked. Enter the original BPM,
