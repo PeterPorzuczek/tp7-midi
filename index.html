@@ -112,11 +112,10 @@
                     <button id="tempo-apply" class="primary" type="submit" disabled>Apply</button>
                     <p id="tempo-result" class="tempo-result" role="status" aria-live="polite">Enter the track BPM and target BPM.</p>
                     <div class="tempo-file-row">
-                        <button id="tempo-read-file" type="button">Read BPM from WAV</button>
-                        <input id="tempo-file" type="file" accept=".wav,audio/wav,audio/x-wav" hidden>
+                        <button id="tempo-read-cue" type="button">Read from cue</button>
                         <span id="tempo-source-info">Enter BPM, or load it from the matching cue file.</span>
                     </div>
-                    <p class="tempo-help">Cue mode fills the original BPM from your matching .cue export. You can also enter BPM or read a local WAV.</p>
+                    <p class="tempo-help">Read BPM from the current track's matching .cue on TP-7 via Bluetooth, or enter it manually. Reading stops playback.</p>
                     <p class="tempo-help"><strong>Before Apply:</strong> start playback on TP-7 and set its on-device SPD to 1×, with external clock sync off. Apply resets the rocker and sends the closest MIDI speed immediately. The TP-7 screen's SPD stays unchanged.</p>
                     <p class="tempo-help">The preview uses this project's experimental speed mapping. MIDI has finite precision; the displayed BPM is a prediction, not a measurement from TP-7.</p>
                 </form>
@@ -418,15 +417,14 @@
     </div>
 
     <script src="tempo.js"></script>
-    <script src="wav-tempo.js"></script>
     <script src="remote-protocol.js?v=20261124-3"></script>
     <script src="companion-ble.js?v=20261124-3"></script>
     <script src="cue-carrier.js?v=20261124-2"></script>
     <script src="dj-cues.js?v=20261123-1"></script>
     <script src="wav-cues.js?v=20261124-3"></script>
-    <script src="app.js?v=20261124-3"></script>
-    <script src="remote-panel.js?v=20261124-3"></script>
-    <script src="carrier-panel.js?v=20261124-3"></script>
+    <script src="app.js?v=20261124-4"></script>
+    <script src="remote-panel.js?v=20261124-4"></script>
+    <script src="carrier-panel.js?v=20261124-4"></script>
     <script src="dj-panel.js?v=20261124-3"></script>
 </body>
 </html>

@@ -28,10 +28,11 @@ accepted. Cue mode automatically fills the source BPM from a validated matching
 including edits made during a transfer. Changing track clears the source BPM; the
 target stays in place. Reading BPM never applies speed automatically.
 
-You can also use **Read BPM from WAV** to read saved ACID tempo metadata
-from a local copy of the track. If the file has no valid BPM, enter it manually.
-The file is read locally and is never uploaded or modified. This is metadata
-reading, not audio beat detection or automatic access to the TP-7's selected file.
+**Read from cue** reads the selected track's matching companion directly from
+TP-7 over Bluetooth, enabling cue mode and starting listening if needed. It also
+loads the cue buttons. Reading stops playback and replaces the previous source
+BPM; manual edits made during the transfer still win. Missing BPM leaves the field
+empty for manual entry. No local WAV picker is involved.
 
 Start playback using the TP-7's physical Play button or a cue, set the device's
 own SPD to **1×**, and disable external clock sync before applying. Apply releases

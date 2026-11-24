@@ -806,11 +806,17 @@ document.addEventListener('DOMContentLoaded', () => {
     createGainControls();
     createCueButtons();
 
-    let tempoTrack = null, tempoSourceKind = 'none';
+    let tempoTrack = null, tempoSourceKind = 'none', cueReadPending = false;
     const sourceInput = document.getElementById('tempo-source');
     const sourceInfo = document.getElementById('tempo-source-info');
+    const cueReadButton = document.getElementById('tempo-read-cue');
+    function updateCueReadButton(remote = window.tp7RemotePanel?.getState()) {
+        cueReadButton.disabled = cueReadPending || !!remote?.busy;
+        cueReadButton.textContent = cueReadPending ? 'Reading cue…' : 'Read from cue';
+    }
     const currentTrack = remote => remote.enabled && remote.file ? `${remote.connection}:${TP7DJCues.trackKey(remote.file)}` : null;
     document.addEventListener('tp7-remote-state', event => {
+        updateCueReadButton(event.detail);
         const next = currentTrack(event.detail);
         if (next === tempoTrack) return;
         tempoTrack = next; tempoFileRevision++; tempoSourceKind = 'none';
@@ -843,36 +849,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    document.getElementById('tempo-read-file').addEventListener('click', () => {
-        document.getElementById('tempo-file').click();
-    });
-
-    document.getElementById('tempo-file').addEventListener('change', async event => {
-        const file = event.target.files[0];
-        if (!file) return;
-        const revision = ++tempoFileRevision;
-        tempoSourceKind = 'wav';
-        const source = document.getElementById('tempo-source');
-        const info = document.getElementById('tempo-source-info');
-        // Never retain the previous track's BPM when reading another track.
-        source.value = '';
+    cueReadButton.addEventListener('click', async () => {
+        if (connectionType !== 'ble' || !isMidiConnected()) {
+            sourceInfo.textContent = 'Connect TP-7 via Bluetooth to read its matching cue file.';
+            return;
+        }
+        if (cueReadPending || window.tp7RemotePanel.getState().busy) return;
+        cueReadPending = true; updateCueReadButton();
+        // An explicit read replaces the previous value; subsequent manual edits
+        // still win through the existing revision check in fromCue().
+        tempoFileRevision++; tempoSourceKind = 'cue'; sourceInput.value = '';
+        sourceInfo.textContent = 'Reading BPM from the current track’s cue file…';
         invalidateTempo();
-        info.textContent = `Reading ${file.name}…`;
-        event.target.value = ''; // Allow choosing the same file again.
         try {
-            const bpm = await TP7WavTempo.read(file);
-            if (revision !== tempoFileRevision) return;
-            if (bpm === null) {
-                info.textContent = `${file.name}: no saved BPM. Enter the track BPM manually.`;
-            } else {
-                source.value = bpm.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
-                info.textContent = `${file.name} · saved WAV BPM (ACID metadata)`;
+            if (!await window.tp7RemotePanel.enableCueMode()) throw new Error(document.getElementById('remote-status').textContent);
+            const ok = await window.tp7CuePanel.read();
+            if (!ok && window.tp7RemotePanel.getState().enabled && tempoSourceKind !== 'manual') {
+                sourceInfo.textContent = document.getElementById('carrier-status').textContent;
             }
         } catch (error) {
-            if (revision !== tempoFileRevision) return;
-            info.textContent = `${error.message} Enter BPM manually.`;
-        }
-        invalidateTempo();
+            if (window.tp7RemotePanel.getState().enabled && tempoSourceKind !== 'manual') sourceInfo.textContent = error.message;
+        } finally { cueReadPending = false; updateCueReadButton(); }
     });
 
     document.getElementById('tempo-form').addEventListener('submit', async event => {

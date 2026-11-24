@@ -14,7 +14,7 @@ let server;
 let url;
 before(async () => {
     const root = path.join(__dirname, '..');
-    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/wav-tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/wav-cues.js', '/companion-ble.js', '/cue-carrier.js', '/carrier-panel.js']);
+    const allowed = new Set(['/index.html', '/styles.css', '/tempo.js', '/app.js', '/remote-protocol.js', '/remote-panel.js', '/dj-cues.js', '/dj-panel.js', '/wav-cues.js', '/companion-ble.js', '/cue-carrier.js', '/carrier-panel.js']);
     server = http.createServer(async (request, response) => {
         const pathname = new URL(request.url, 'http://localhost').pathname;
         const name = pathname === '/' ? '/index.html' : pathname;
@@ -119,8 +119,11 @@ async function openApp(t, mode = 'usb', autoLoad = false) {
                                 window.emitCompanion([77, ...request.data.slice(1)]);
                             }
                             if (request.command === 127 && request.data[0] === 64) {
-                                window.emitTrack(window.mockTrack?.filename || 'example_cues_15_tempo_88.wav', window.mockTrack?.numFrames || 4800000);
-                                window.emitCompanion([77, 227, 134, 0, 0]);
+                                const sendTrack = () => {
+                                    window.emitTrack(window.mockTrack?.filename || 'example_cues_15_tempo_88.wav', window.mockTrack?.numFrames || 4800000);
+                                    window.emitCompanion([77, 227, 134, 0, 0]);
+                                };
+                                if (window.sessionTrackDelay) setTimeout(sendTrack, window.sessionTrackDelay); else sendTrack();
                             }
                             if (request.command === 127 && request.data[0] === 81 && window.changeFileOnStop) {
                                 window.changeFileOnStop = false;
@@ -657,13 +660,9 @@ test('editing BPM cancels a queued BLE Apply before it is transmitted', async t 
     assert.match(await page.locator('#tempo-result').innerText(), /^Preview/);
 });
 
-test('WAV metadata and missing metadata, decimal comma, keyboard Apply and mobile layout', async t => {
+test('decimal comma, keyboard Apply and mobile tempo layout', async t => {
     const page = await openApp(t);
-    const file = Buffer.alloc(44);
-    file.write('RIFF'); file.writeUInt32LE(36, 4); file.write('WAVEacid', 8);
-    file.writeUInt32LE(24, 16); file.writeFloatLE(127.125, 40);
-    await page.locator('#tempo-file').setInputFiles({ name: 'track.wav', mimeType: 'audio/wav', buffer: file });
-    await page.waitForFunction(() => document.getElementById('tempo-source').value === '127.125');
+    await page.locator('#tempo-source').fill('127.125');
     await page.locator('#tempo-target').fill('127,125');
     await page.locator('#tempo-target').press('Enter');
     await page.waitForFunction(() => document.getElementById('tempo-result').dataset.status === 'sent');
@@ -672,11 +671,6 @@ test('WAV metadata and missing metadata, decimal comma, keyboard Apply and mobil
     await page.locator('#tempo-apply').focus();
     await page.locator('#tempo-apply').press('Space');
     assert.deepEqual(await page.evaluate(() => window.sent), [[0xB0, 18, 64, 0xE0, 0, 64]]);
-    file.writeFloatLE(0, 40);
-    await page.locator('#tempo-file').setInputFiles({ name: 'without-bpm.wav', mimeType: 'audio/wav', buffer: file });
-    await page.waitForFunction(() => document.getElementById('tempo-source-info').textContent.includes('no saved BPM'));
-    assert.equal(await page.locator('#tempo-source').inputValue(), '');
-    assert.equal(await page.locator('#tempo-apply').isDisabled(), true);
     await enterTempo(page);
     for (const width of [320, 375, 768, 1280]) {
         await page.setViewportSize({ width, height: 900 });
@@ -688,10 +682,56 @@ test('WAV metadata and missing metadata, decimal comma, keyboard Apply and mobil
     }
     if (process.env.TP7_SCREENSHOT_DIR) {
         await fs.mkdir(process.env.TP7_SCREENSHOT_DIR, { recursive: true });
-        await page.locator('#section-pitch').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'tempo-desktop.png') });
+        await page.locator('#section-tempo').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'tempo-desktop.png') });
         await page.setViewportSize({ width: 375, height: 1100 });
-        await page.locator('#section-pitch').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'tempo-mobile.png') });
+        await page.locator('#section-tempo').screenshot({ path: path.join(process.env.TP7_SCREENSHOT_DIR, 'tempo-mobile.png') });
     }
+});
+
+test('Read from cue enables listening, waits for track metadata, reads BPM and preserves later manual edits', async t => {
+    const page = await openApp(t, 'ble', true);
+    assert.equal(await page.locator('#tempo-read-cue').innerText(), 'Read from cue');
+    assert.equal(await page.locator('#tempo-file').count(), 0);
+    await page.locator('.conn-tab[data-tab="ble"]').click();
+    await page.locator('#ble-connect-btn').click();
+    await page.waitForFunction(() => window.bleSent.length >= 18 && !window.writeInProgress);
+    await carrierFixture(page, 'Current song.wav', [0, 480000], 4800000, 127.125);
+    await page.evaluate(() => { window.sessionTrackDelay = 100; window.bleSent = []; });
+    await enterTempo(page, '120', '130');
+    await page.locator('#tempo-read-cue').click();
+    await page.waitForFunction(() => document.getElementById('tempo-source').value === '127.125' && !document.getElementById('tempo-read-cue').disabled);
+    assert.equal(await page.locator('#cue-mode').isChecked(), true);
+    assert.equal(await page.locator('#carrier-cues button').count(), 2);
+    assert.equal(await page.locator('#tempo-target').inputValue(), '130');
+    assert.equal(await page.evaluate(() => window.companionRequests.filter(r => r.data[0] === 67).length), 1);
+    assert.equal(await page.evaluate(() => window.remoteRequests.some(r => r.data[0] === 80)), false);
+    assert.equal(await page.evaluate(() => window.bleSent.some(packet => packet[2] === 0xE0)), false);
+    await page.locator('#carrier-options summary').click();
+    await page.locator('#carrier-auto').uncheck();
+    await carrierFixture(page, 'No BPM.wav', [0], 4800000, null);
+    await page.locator('#tempo-read-cue').click();
+    await page.waitForFunction(() => document.getElementById('tempo-source-info').textContent.includes('no BPM') && !document.getElementById('tempo-read-cue').disabled);
+    assert.equal(await page.locator('#tempo-source').inputValue(), '');
+    assert.equal(await page.locator('#tempo-apply').isDisabled(), true);
+    await carrierFixture(page, 'Another song.wav', [0, 480000], 4800000, 95);
+    await page.evaluate(() => { window.holdCarrier = true; window.finishCarrier = null; });
+    await page.locator('#tempo-read-cue').click();
+    await page.waitForFunction(() => typeof window.finishCarrier === 'function');
+    await page.locator('#tempo-source').fill('121.5');
+    await page.evaluate(() => window.finishCarrier());
+    await page.waitForFunction(() => !document.getElementById('tempo-read-cue').disabled);
+    assert.equal(await page.locator('#tempo-source').inputValue(), '121.5');
+    assert.match(await page.locator('#tempo-source-info').innerText(), /Manual/);
+});
+
+test('Read from cue requires Bluetooth and keeps a manual BPM when disconnected', async t => {
+    const page = await openApp(t, 'ble');
+    await enterTempo(page);
+    await page.locator('#tempo-read-cue').click();
+    assert.match(await page.locator('#tempo-source-info').innerText(), /Connect TP-7 via Bluetooth/);
+    assert.equal(await page.locator('#tempo-source').inputValue(), '120');
+    assert.equal(await page.locator('#cue-mode').isChecked(), false);
+    assert.equal(await page.evaluate(() => window.remoteRequests.length), 0);
 });
 
 test('notification failure sends no vendor command and preserves the original controls', async t => {

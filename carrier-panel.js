@@ -144,7 +144,9 @@ document.addEventListener('DOMContentLoaded', () => {
             } else status(`${message}${cleanup}`, true);
         }
         controls();
+        return decoded !== null;
     }
+    window.tp7CuePanel = { read: () => loadCues() };
     el('carrier-read').addEventListener('click', () => loadCues());
     el('carrier-cancel').addEventListener('click', () => { controller?.abort(); controls(); });
     el('carrier-format').addEventListener('change', () => {

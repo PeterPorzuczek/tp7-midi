@@ -280,6 +280,27 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     }
-    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runCompanionTask };
+    async function enableCueMode() {
+        if (busy) return false;
+        enabled = true; element('cue-mode').checked = true; buttons();
+        if (!getState().ready && !await startListening()) return false;
+        if (live.file) return true;
+        // The session ACK can precede the unsolicited current-file event.
+        const token = generation;
+        return new Promise(resolve => {
+            const finish = ok => { clearTimeout(timer); document.removeEventListener('tp7-remote-state', changed); resolve(ok); };
+            const changed = () => {
+                if (token !== generation || !enabled || !isMidiConnected()) finish(false);
+                else if (getState().ready && live.file) finish(true);
+            };
+            const timer = setTimeout(() => {
+                status('No current track received. Select a track on TP-7 and try again.', true);
+                finish(false);
+            }, 5000);
+            document.addEventListener('tp7-remote-state', changed);
+            changed();
+        });
+    }
+    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runCompanionTask, enableCueMode };
     connectionChanged();
 });
