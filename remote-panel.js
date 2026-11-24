@@ -1,215 +1,92 @@
-// Read-only discovery and explicitly requested, evidenced transport commands.
-// Seeking uses the companion app's position command. Companion track events
-// contain no markers; file-panel.js separately experiments with raw FILE reads.
+// Live track/transport session for opt-in cue mode. No settings or FILE probes.
 document.addEventListener('DOMContentLoaded', () => {
     const protocol = TP7RemoteProtocol;
     const element = id => document.getElementById(id);
-    const report = { version: 7, transport: null, metadata: null, settings: null, settingsSupport: null, bluetooth: null, fileAccess: null, companionAccess: null,
-        live: { file: null, position: null, playback: null }, positionSamples: [], events: [] };
+    let live = { file: null, position: null, playback: null };
     const pending = new Map();
     const receiver = new protocol.BleReceiver(receive);
-    let nextId = 0;
-    let generation = 0;
-    let activeEndpoint = null;
-    let notificationEndpoint = null;
-    let inputEndpoint = null;
-    let busy = false;
-    let identified = false;
-    let sessionConfirmed = false;
-    let renderTimer = null;
-    let fileRevision = 0;
-    let fileActive = false;
-    let fileBlocked = false;
-    let fileEpoch = 0;
+    let nextId = 0, generation = 0, fileRevision = 0;
+    let activeEndpoint = null, notificationEndpoint = null, inputEndpoint = null;
+    let busy = false, enabled = false, identified = false, sessionConfirmed = false;
     let positionReceivedAt = null;
-
     const fileKey = file => file ? JSON.stringify([file.folder, file.filename, file.sampleRate, file.numFrames, file.numTracks]) : null;
-    const getState = () => ({ file: report.live.file ? { ...report.live.file } : null,
-        positionMs: report.live.position?.positionMs ?? null,
-        playing: report.live.playback?.playing ?? null,
+    const getState = () => ({ file: live.file ? { ...live.file } : null,
+        positionMs: live.position?.positionMs ?? null, playing: live.playback?.playing ?? null,
         positionAgeMs: positionReceivedAt === null ? null : Math.max(0, performance.now() - positionReceivedAt),
-        connected: !!isMidiConnected(), ready: !!isMidiConnected() && sessionConfirmed, busy,
-        identified, fileActive, fileBlocked, fileUnsupported: report.fileAccess?.result === 'unsupported', connection: generation });
-
-    function renderReport() {
-        if (renderTimer !== null) return;
-        renderTimer = setTimeout(() => {
-            renderTimer = null;
-            element('remote-report').textContent = JSON.stringify(report, null, 2);
-        }, 150);
-    }
-
-    function addEvent(kind, value) {
-        report.events.push({ time: new Date().toISOString(), kind, ...value });
-        if (report.events.length > 200) report.events.shift();
-        renderReport();
-    }
-
+        connected: !!isMidiConnected(), ready: enabled && !!isMidiConnected() && sessionConfirmed,
+        enabled, busy, connection: generation });
     function status(text, error = false) {
         element('remote-status').textContent = text;
         element('remote-status').dataset.status = error ? 'error' : '';
     }
-
     function showLive() {
-        const { file, position, playback } = report.live;
-        element('remote-file').textContent = file ? `${file.folder}/${file.filename}` : 'Waiting for the current file…';
-        const ms = position?.positionMs;
-        element('remote-position').textContent = ms === undefined ? '—' :
-            `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
+        const { file, position, playback } = live;
+        element('remote-file').textContent = file ? file.filename : 'Waiting for the current track…';
+        element('remote-position').textContent = position ? TP7DJCues.formatTime(position.positionMs) : '—';
         element('remote-playback').textContent = !playback ? 'Unknown' : playback.playing ? 'Playing' : 'Stopped';
-        const duration = file?.sampleRate > 0 ? TP7DJCues.formatTime(Math.round(file.numFrames * 1000 / file.sampleRate)) : '—';
-        element('remote-file-info').textContent = file ? `${duration} · ${file.sampleRate} Hz · ${file.numTracks} tracks` : '';
+        element('remote-file-info').textContent = file?.sampleRate > 0 ?
+            `${TP7DJCues.formatTime(Math.round(file.numFrames * 1000 / file.sampleRate))} · ${file.numTracks} tracks` : '';
     }
-
     function resetLive() {
-        fileRevision++;
-        positionReceivedAt = null;
-        report.live = { file: null, position: null, playback: null };
-        report.positionSamples = [];
+        fileRevision++; positionReceivedAt = null;
+        live = { file: null, position: null, playback: null };
         showLive();
     }
-
-    function recordCompanion(data, source) {
+    function recordCompanion(data) {
         const decoded = protocol.companionEvent(data);
-        if (!decoded) return false;
-        const time = new Date().toISOString();
+        if (!decoded) return;
         if (decoded.type === 'position') {
             positionReceivedAt = performance.now();
-            const sample = { time, positionMs: decoded.positionMs };
-            report.live.position = sample;
-            report.positionSamples.push(sample);
-            if (report.positionSamples.length > 600) report.positionSamples.shift();
-            // Periodic position traffic must not evict the initial file event
-            // and command acknowledgements from the useful diagnostic history.
-            renderReport();
-        } else {
-            if (decoded.type === 'file') {
-                const previous = report.live.file;
-                if (fileKey(previous) !== fileKey(decoded)) {
-                    fileRevision++;
-                    report.live.position = null;
-                    report.live.playback = null;
-                    positionReceivedAt = null;
-                    report.positionSamples = [];
-                }
-                report.live.file = { time, ...decoded };
-            } else report.live.playback = { time, playing: decoded.playing };
-            addEvent('companion-event', { source, data, decoded });
-        }
-        showLive();
-        buttons();
-        return true;
+            live.position = { positionMs: decoded.positionMs };
+        } else if (decoded.type === 'file') {
+            if (fileKey(live.file) !== fileKey(decoded)) resetLive();
+            live.file = decoded;
+        } else live.playback = { playing: decoded.playing };
+        showLive(); buttons();
     }
-
-    function seekPosition() {
-        const positionMs = protocol.positionFromSeconds(element('remote-seek-time').value);
-        const file = report.live.file;
-        if (positionMs === null || !file || file.sampleRate <= 0 || file.numFrames <= 0 ||
-            positionMs * file.sampleRate >= file.numFrames * 1000) return null;
-        return positionMs;
-    }
-
     function buttons() {
         const connected = !!isMidiConnected();
-        element('remote-inspect').disabled = busy || !connected;
-        element('remote-session').disabled = busy || !connected || !identified;
-        element('remote-play').disabled = busy || !connected || !sessionConfirmed;
-        element('remote-stop').disabled = busy || !connected || !sessionConfirmed;
-        element('remote-seek').disabled = busy || !connected || !sessionConfirmed || seekPosition() === null;
+        element('cue-mode-content').hidden = !enabled;
+        element('remote-session').disabled = !enabled || busy || !connected;
+        element('remote-session').textContent = sessionConfirmed ? 'Restart listening' : 'Start listening';
+        element('remote-play').disabled = !enabled || busy || !connected || !sessionConfirmed;
+        element('remote-stop').disabled = !enabled || busy || !connected || !sessionConfirmed;
         document.dispatchEvent(new CustomEvent('tp7-remote-state', { detail: getState() }));
     }
-
+    function detach() {
+        for (const waiter of pending.values()) waiter.reject(new Error('Cue mode or connection changed.'));
+        if (notificationEndpoint) notificationEndpoint.removeEventListener('characteristicvaluechanged', onNotification);
+        if (inputEndpoint) inputEndpoint.onmidimessage = null;
+        notificationEndpoint = null; inputEndpoint = null; receiver.reset();
+    }
     function connectionChanged() {
         const endpoint = isMidiConnected() ? (connectionType === 'ble' ? bleMidiCharacteristic : midiOutput) : null;
         if (endpoint !== activeEndpoint) {
-            generation++;
-            fileEpoch++;
-            fileBlocked = false;
-            report.fileAccess = null;
-            report.companionAccess = null;
-            for (const request of pending.values()) request.reject(new Error('Connection changed. Read TP-7 again.'));
-            if (notificationEndpoint) notificationEndpoint.removeEventListener('characteristicvaluechanged', onNotification);
-            if (inputEndpoint) inputEndpoint.onmidimessage = null;
-            notificationEndpoint = null;
-            inputEndpoint = null;
-            receiver.reset();
-            activeEndpoint = endpoint;
-            identified = false;
-            sessionConfirmed = false;
-            report.transport = connectionType;
-            report.metadata = null;
-            report.settings = null;
-            report.settingsSupport = null;
-            resetLive();
-            report.bluetooth = connectionType === 'ble' ? { notifications: 0, ignoredClockPackets: 0, recentPackets: [] } : null;
-            report.events = [];
-            clearTimeout(renderTimer);
-            renderTimer = null;
-            element('remote-device').textContent = 'Device information has not been read.';
-            element('remote-report').textContent = 'No device replies yet.';
-            status(endpoint ? 'Connected. Press Read TP-7 to check device replies.' : 'Connect TP-7 first.');
+            generation++; detach(); activeEndpoint = endpoint;
+            identified = false; sessionConfirmed = false; resetLive();
+            status(endpoint ? 'Enable cue mode and start listening.' : 'Connect TP-7 first.');
         }
         buttons();
     }
-
     function receive(bytes) {
-        if (fileActive && [0xF0, 0, 0x20, 0x76, 0x19, 0x33].every((byte, i) => bytes[i] === byte)) {
-            fileBlocked = true;
-            const error = new Error('TP-7 emitted a firmware debug frame. File access stopped; restart TP-7 before another test.');
-            addEvent('file-debug-stop', { bytes: Array.from(bytes).slice(0, 512) });
-            for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(error);
-            buttons();
-            return;
-        }
+        if (!enabled) return;
         const reply = protocol.parse(bytes);
-        // Bound unknown events too. Never log MIDI clock or audio payloads.
         if (!reply) {
             const event = protocol.parseEvent(bytes);
-            if (event) {
-                if (!recordCompanion(event.data, 'unsolicited')) addEvent('companion-event', window.tp7CompanionBusy ?
-                    { opcode: event.data[0], byteLength: event.data.length, payloadOmitted: true } : { data: event.data.slice(0, 2048) });
-                return;
-            }
-            if (bytes[0] === 0xF0) addEvent('unrecognized-sysex', window.tp7CompanionBusy ?
-                { byteLength: bytes.length, payloadOmitted: true } : { bytes: Array.from(bytes).slice(0, 512) });
+            if (event) recordCompanion(event.data);
             return;
         }
-        const request = pending.get(reply.id);
-        // File data pages can contain a few incidental audio bytes. Record
-        // counts/page numbers, not their contents, in the shareable report.
-        addEvent('reply', window.tp7CompanionBusy ? { ...reply, data: [], byteLength: reply.data.length, payloadOmitted: true } :
-            request?.fileData ? { ...reply, data: reply.data.slice(0, 2), byteLength: reply.data.length, payloadOmitted: true } :
-            { ...reply, data: reply.data.slice(0, 2048) });
-        if (reply.command === 127 && reply.status === 0) recordCompanion(reply.data, 'reply');
-        if (!request || reply.command !== request.command) return;
-        if (reply.status === 0) request.resolve(reply);
-        else if (reply.status !== 64) request.reject(Object.assign(
-            new Error(`TP-7 rejected command ${reply.command} (status ${reply.status}).`),
-            { command: reply.command, status: reply.status }));
-        // Status 64 is progress, not confirmation. The original timeout remains.
+        if (reply.command === 127 && reply.status === 0) recordCompanion(reply.data);
+        const waiter = pending.get(reply.id);
+        if (!waiter || reply.command !== waiter.command) return;
+        if (reply.status === 0) waiter.resolve(reply);
+        else if (reply.status !== 64) waiter.reject(new Error(`TP-7 rejected command ${reply.command} (status ${reply.status}).`));
     }
-
     function onNotification(event) {
         if (event.target !== notificationEndpoint || activeEndpoint !== notificationEndpoint) return;
         const view = event.target.value;
-        const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-        const bluetooth = report.bluetooth;
-        bluetooth.notifications++;
-        // Retain raw input as evidence even when its message type is unknown.
-        // Omit packets containing only clock/active-sensing pairs so they do
-        // not push physical button events out of the bounded history.
-        const clockOnly = bytes.length >= 3 && (bytes.length - 1) % 2 === 0 &&
-            (bytes[0] & 0xC0) === 0x80 && bytes.slice(1).every((byte, index) =>
-                index % 2 === 0 ? byte >= 128 : byte === 0xF8 || byte === 0xFE);
-        if (clockOnly) bluetooth.ignoredClockPackets++;
-        else if (!fileActive && !window.tp7CompanionBusy) {
-            bluetooth.recentPackets.push({ time: new Date().toISOString(), bytes: Array.from(bytes).slice(0, 512) });
-            if (bluetooth.recentPackets.length > 64) bluetooth.recentPackets.shift();
-            renderReport();
-        }
-        receiver.push(bytes);
+        receiver.push(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
     }
-
     async function listen(token) {
         if (connectionType === 'ble') {
             const endpoint = bleMidiCharacteristic;
@@ -248,7 +125,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function send(bytes, token, isPending) {
         const check = () => {
-            if (token !== generation || !isMidiConnected()) throw new Error('Connection changed. Read TP-7 again.');
+            if (!enabled || token !== generation || !isMidiConnected()) throw new Error('Connection changed. Start listening again.');
             if (!isPending()) throw new Error('Request expired before transmission.');
         };
         check();
@@ -281,11 +158,9 @@ document.addEventListener('DOMContentLoaded', () => {
             const timer = setTimeout(() => finish(reject, new Error('No TP-7 reply within 5 seconds. The command is not confirmed.')), 5000);
             pending.set(id, {
                 command,
-                fileData: command === 5 && data[0] === 3 && data[1] === 1,
                 resolve: value => finish(resolve, value),
                 reject: error => finish(reject, error),
             });
-            addEvent('request', { id, command, data });
             try { Promise.resolve(send(protocol.encode(id, command, data), token, () => pending.has(id) && isCurrent())).catch(error => finish(reject, error)); }
             catch (error) { finish(reject, error); }
         });
@@ -299,76 +174,43 @@ document.addEventListener('DOMContentLoaded', () => {
         status('Waiting for TP-7…');
         buttons();
         try {
-            if (!isMidiConnected()) throw new Error('Connect TP-7 first.');
+            if (!enabled || !isMidiConnected()) throw new Error('Enable cue mode and connect TP-7 first.');
             await listen(token);
             await operation(token);
             return true;
         } catch (error) {
-            if (token === generation) { addEvent('error', { message: error.message }); status(error.message, true); }
+            if (token === generation) status(error.message, true);
             return false;
         } finally { busy = false; buttons(); }
     }
 
-    element('remote-inspect').addEventListener('click', () => run(async token => {
-        identified = false;
-        sessionConfirmed = false;
-        report.metadata = null;
-        report.settings = null;
-        report.settingsSupport = null;
-        resetLive();
-        status('Waiting for TP-7 identification…');
-        const greeting = await request(1, [], token);
-        const text = new TextDecoder().decode(new Uint8Array(greeting.data));
-        const fields = Object.fromEntries(text.replace(/\0/g, '').split(';').map(pair => {
-            const colon = pair.indexOf(':');
-            return [pair.slice(0, colon), pair.slice(colon + 1)];
-        }));
-        if (fields.product !== 'TP-7') throw new Error('The reply did not identify a TP-7.');
-        identified = true;
-        // Do not include the serial number in the report metadata.
-        report.metadata = { product: fields.product, firmware: fields.sw_version || fields.os_version, mode: fields.mode };
-        element('remote-device').textContent = `TP-7 · firmware ${report.metadata.firmware || 'unknown'} · ${connectionType.toUpperCase()}`;
-        status('TP-7 replied. Checking its settings catalogue…');
-        try {
-            await request(6, [1, 3, 232], token); // Official INIT, 1000 ms.
-        } catch (error) {
-            if (error.command !== 6 || error.status !== 2) throw error;
-            report.settingsSupport = 'unsupported';
-            addEvent('settings-unavailable', { reason: 'command-not-found' });
-            status('TP-7 identified. This firmware does not support the settings reader. Press Start remote session to receive file and playback events.');
-            return;
+    function startListening() {
+        return run(async token => {
+            identified = false; sessionConfirmed = false; resetLive(); buttons();
+            status('Connecting to the TP-7 track session…');
+            const greeting = await request(1, [], token);
+            const text = new TextDecoder().decode(new Uint8Array(greeting.data)).replace(/\0/g, '');
+            if (!text.split(';').includes('product:TP-7')) throw new Error('The reply did not identify a TP-7.');
+            identified = true;
+            await request(127, [0x40], token);
+            if (token !== generation || !enabled) throw new Error('Cue mode changed.');
+            sessionConfirmed = true;
+            status('Listening to the current track.');
+        });
+    }
+    element('remote-session').addEventListener('click', startListening);
+    element('cue-mode').addEventListener('change', () => {
+        enabled = element('cue-mode').checked;
+        if (!enabled) {
+            generation++; detach(); identified = false; sessionConfirmed = false; resetLive();
+            status('Cue mode is off.');
         }
-        report.settingsSupport = 'supported';
-        const all = [];
-        for (let page = 0; page < 128; page++) {
-            const reply = await request(6, [2, page >> 8, page & 255], token);
-            const chunk = protocol.settingsChunk(reply.data);
-            if (!chunk.length) {
-                const catalogue = JSON.parse(new TextDecoder().decode(new Uint8Array(all)));
-                report.settings = catalogue;
-                const settings = protocol.flattenSettings(catalogue);
-                const cueRelated = settings.filter(setting => /cue|marker/i.test(JSON.stringify(setting)));
-                addEvent('settings-read', { count: settings.length, cueRelated });
-                status(`Read ${settings.length} device settings; ${cueRelated.length} mention cue/marker. Native cue selection is not yet validated. Copy the report for analysis.`);
-                return;
-            }
-            all.push(...chunk);
-            if (all.length > 262144) throw new Error('Settings catalogue exceeded the read limit.');
-        }
-        throw new Error('Settings catalogue did not end within 128 pages.');
-    }));
-
-    element('remote-session').addEventListener('click', () => run(async token => {
-        sessionConfirmed = false;
-        status('Requesting companion session…');
-        await request(127, [0x40], token);
-        sessionConfirmed = true;
-        status('TP-7 acknowledged the session. DJ Jump Grid uses the current file and its length.');
-    }));
-
+        buttons();
+        if (enabled && isMidiConnected() && !busy) startListening();
+    });
     async function transport(opcode) {
         await run(async token => {
-            if (!sessionConfirmed) throw new Error('Start and confirm a remote session first.');
+            if (!sessionConfirmed) throw new Error('Start listening first.');
             if (opcode === 0x50) {
                 await transmitMidiBatch([[0xB0, TP7.CC_REC_ARM, 0], [0xB0, TP7.CC_CUE_REC, 0]], () => token === generation);
                 state.cueRecMode = false;
@@ -377,23 +219,22 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             status('Waiting for transport acknowledgement…');
             await request(127, [opcode], token);
-            status(opcode === 0x50 ? 'TP-7 acknowledged Resume. It resumes at the current position; it does not jump to the selected cue.' : 'TP-7 acknowledged Stop.');
+            status(opcode === 0x50 ? 'Playing.' : 'Stopped.');
         });
     }
     element('remote-play').addEventListener('click', () => transport(0x50));
     element('remote-stop').addEventListener('click', () => transport(0x51));
-    element('remote-seek-time').addEventListener('input', buttons);
     function jumpTo(positionMs, selectionIsCurrent = () => true) {
-        const file = report.live.file;
+        const file = live.file;
         const revision = fileRevision;
         const connection = generation;
         return run(async token => {
             if (!sessionConfirmed || !Number.isInteger(positionMs) || positionMs < 0 || positionMs > 0xFFFFFFFF ||
                 !file || file.sampleRate <= 0 || positionMs * file.sampleRate >= file.numFrames * 1000) {
-                throw new Error('Enter a valid time within the current track and start a remote session.');
+                throw new Error('Select a cue within the current track and start listening.');
             }
-            const isCurrent = () => token === connection && token === generation && revision === fileRevision &&
-                fileKey(report.live.file) === fileKey(file) && selectionIsCurrent();
+            const isCurrent = () => enabled && token === connection && token === generation && revision === fileRevision &&
+                fileKey(live.file) === fileKey(file) && selectionIsCurrent();
             await transmitMidiBatch([[0xB0, TP7.CC_REC_ARM, 0], [0xB0, TP7.CC_CUE_REC, 0]], isCurrent);
             state.cueRecMode = false;
             element('cue-rec-off').classList.add('active');
@@ -404,97 +245,41 @@ document.addEventListener('DOMContentLoaded', () => {
             await request(127, protocol.seekData(positionMs), token, isCurrent);
             await request(127, [0x50], token, isCurrent);
             if (!isCurrent()) throw new Error('Track, connection or jump selection changed.');
-            status(`TP-7 acknowledged a jump to ${(positionMs / 1000).toFixed(3)} s and playback. Check the reported position on the device. This selects a time, not a native cue number.`);
+            status(`Playing from ${(positionMs / 1000).toFixed(3)} s.`);
         });
     }
-    element('remote-seek').addEventListener('click', () => {
-        const positionMs = seekPosition();
-        jumpTo(positionMs, () => seekPosition() === positionMs);
-    });
-    element('remote-copy').addEventListener('click', async () => {
-        const text = JSON.stringify(report, null, 2);
-        try { await navigator.clipboard.writeText(text); status('Report copied.'); }
-        catch {
-            const area = element('remote-copy-text');
-            area.value = text;
-            area.hidden = false;
-            area.focus();
-            area.select();
-            status('Select and copy the report below.');
-        }
-    });
-
-    function runFileTask(operation) {
+    function runCompanionTask(operation) {
         return run(async token => {
-            if (!identified) throw new Error('Press Read TP-7 first.');
-            if (fileBlocked) throw new Error('Restart TP-7 and reconnect before another FILE test.');
-            const revision = fileRevision;
-            const epoch = ++fileEpoch;
-            fileActive = true;
-            buttons();
-            const check = () => {
-                if (token !== generation || epoch !== fileEpoch || revision !== fileRevision || !isMidiConnected()) throw new Error('File test cancelled: track or connection changed.');
-                if (fileBlocked) throw new Error('File test stopped after a firmware debug frame.');
-            };
-            try {
-                await operation(async data => {
-                    TP7FileAccess.assertReadRequest(data);
-                    check();
-                    const reply = await request(5, data, token, () => { check(); return true; });
-                    check();
-                    return reply.data;
-                }, check, summary => {
-                    check(); report.fileAccess = summary; renderReport();
-                });
-                check();
-            } finally { fileActive = false; buttons(); }
-        });
-    }
-    function cancelFileTask() {
-        if (!fileActive) return;
-        fileEpoch++;
-        for (const waiter of pending.values()) if (waiter.command === 5) waiter.reject(new Error('File test cancelled.'));
-    }
-    function runCompanionTask(operation, { restart = false } = {}) {
-        return run(async token => {
-            if (!identified || !sessionConfirmed || !report.live.file || connectionType !== 'ble') {
-                throw new Error('Connect via Bluetooth, Read TP-7 and start a remote session first.');
+            if (!identified || !sessionConfirmed || !live.file || connectionType !== 'ble') {
+                throw new Error('Connect via Bluetooth and start listening first.');
             }
-            const file = { ...report.live.file };
-            const revision = fileRevision;
+            const file = { ...live.file }, revision = fileRevision;
             let clean = false;
             window.tp7CompanionBusy = true;
-            // A companion transfer takes over transport and may move its position.
-            // Resume highlighting only from new remote-session notifications.
-            report.live.position = null;
-            report.live.playback = null;
-            positionReceivedAt = null;
-            showLive(); renderReport();
+            live.position = null; live.playback = null; positionReceivedAt = null; showLive();
             try {
                 await bleWriteQueue;
                 const check = () => {
-                    if (token !== generation || revision !== fileRevision || !isMidiConnected()) throw new Error('Track or connection changed.');
+                    if (!enabled || token !== generation || revision !== fileRevision || !isMidiConnected()) throw new Error('Track, mode or connection changed.');
                 };
                 check();
-                clean = await operation(bleDevice, file, check, summary => {
-                    if (token === generation) { report.companionAccess = summary; renderReport(); }
-                });
+                clean = await operation(bleDevice, file, check);
             } finally {
                 window.tp7CompanionBusy = false;
                 if (token === generation) {
                     sessionConfirmed = false;
-                    status('Companion test finished. Press Start remote session to use playback controls again.');
-                    if (restart && clean && revision === fileRevision) {
-                        await request(127, [0x40], token, () => token === generation && revision === fileRevision);
-                        if (token === generation && revision === fileRevision) {
+                    status('Start listening again to use playback controls.');
+                    if (clean && enabled && revision === fileRevision) {
+                        await request(127, [0x40], token, () => enabled && token === generation && revision === fileRevision);
+                        if (enabled && token === generation && revision === fileRevision) {
                             sessionConfirmed = true;
-                            status('Companion transfer finished. Remote session restored; playback remains stopped.');
+                            status('Listening. Cue loading leaves playback stopped.');
                         }
                     }
                 }
             }
         });
     }
-    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runFileTask, cancelFileTask, runCompanionTask };
+    window.tp7RemotePanel = { connectionChanged, getState, jumpTo, runCompanionTask };
     connectionChanged();
 });

@@ -2,6 +2,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const companion = require('../companion-ble.js');
 const protocol = require('../remote-protocol.js');
+const codec = require('../cue-carrier.js');
+const audio = require('./helpers/carrier-audio.cjs');
 
 test('companion packet layout matches the app, including continuation without a BLE header', () => {
     const frame = protocol.encode(1, 127, [64]);
@@ -60,8 +62,12 @@ function fixture(mode = 'ok') {
             if (mode === 'track-change') { changed = true; return; }
             if (mode === 'orphan') { emit(Uint8Array.from([3, 1, 2])); return; }
             if (mode === 'empty') { event([0x49, 0]); return; }
-            emit(new Uint8Array([2, 0, 0, 0, 0, 1, 0, 0, 0]));
-            for (let i = 0; i < 18; i++) { const packet = new Uint8Array(244); packet[0] = 3; emit(packet); }
+            const wave = codec.makeWave({ ...file, kind: 'wav', bpm: 128, cues: [0, 240000] });
+            for (const block of audio.encode(audio.resample(wave.bytes))) {
+                emit(Uint8Array.from([2, 0, 0, 0, 0, ...block.slice(0, 239)]));
+                for (let at = 239; at < block.length; at += 243) emit(Uint8Array.from([3, ...block.slice(at, at + 243)]));
+            }
+            event([0x49, 0]);
         }
     }, () => {});
     const endpoint = {
@@ -76,16 +82,16 @@ function fixture(mode = 'ok') {
         return { async getCharacteristic(uuid) { assert.equal(uuid, companion.CHARACTERISTIC); return endpoint; } };
     } } };
     return { requests, reports, listeners, get stopped() { return stopped; },
-        run: () => companion.probe({ device, file, protocol, signal: controller.signal,
-            check: () => { if (changed) throw new Error('Track changed.'); }, update: summary => reports.push(JSON.stringify(summary)) }) };
+        run: () => companion.readCarrier({ device, file, protocol, signal: controller.signal,
+            check: () => { if (changed) throw new Error('Track changed.'); }, update: summary => reports.push(JSON.stringify(summary)) }, codec) };
 }
 
-test('companion probe captures only byte counts and always aborts, exits transfer and ends session', async () => {
+test('cue transfer decodes markers and BPM then exits transfer and ends the session', async () => {
     const f = fixture(); const result = await f.run();
-    assert.equal(result.result, 'audio-received'); assert.ok(result.audioBytes >= 4096);
-    assert.deepEqual(f.requests.map(r => r.slice(0, 2)), [[1], [127, 64], [127, 81], [127, 67], [127, 70], [127, 72], [127, 68], [127, 65]]);
-    assert.deepEqual(f.requests[3], [127, 67, 0, ...new TextEncoder().encode('recordings\0example.wav\0')]);
-    assert.equal(result.nativeCuesRead, false); assert.deepEqual(result.cleanupErrors, []);
+    assert.equal(result.result, 'cues-decoded'); assert.ok(result.audioBytes >= 4096);
+    assert.deepEqual(f.requests.map(r => r.slice(0, 2)), [[1], [127, 64], [127, 81], [127, 67], [127, 70], [127, 68], [127, 65]]);
+    assert.deepEqual(f.requests[3], [127, 67, 0, ...new TextEncoder().encode('recordings\0example.cue\0')]);
+    assert.equal(result.carrier.bpm, 128); assert.equal(result.carrier.cues.length, 2); assert.equal(result.nativeCuesRead, false); assert.deepEqual(result.cleanupErrors, []);
     assert.equal(f.listeners.size, 0); assert.equal(f.stopped, true);
     assert.ok(!JSON.stringify(result).includes('sw_version')); // Greeting/serial and audio payloads are not logged.
 });
@@ -98,7 +104,7 @@ test('missing companion service sends no commands', async () => {
 test('rejection, cancellation, track change and malformed audio all clean up without success', async () => {
     for (const mode of ['reject', 'cancel', 'track-change', 'orphan', 'empty']) {
         const f = fixture(mode); const result = await f.run();
-        assert.notEqual(result.result, 'audio-received', mode);
+        assert.notEqual(result.result, 'cues-decoded', mode);
         const cleanup = mode === 'empty' ? [[127, 68], [127, 65]] : [[127, 72], [127, 68], [127, 65]];
         assert.deepEqual(f.requests.slice(-cleanup.length), cleanup, mode);
         assert.equal(f.listeners.size, 0, mode);

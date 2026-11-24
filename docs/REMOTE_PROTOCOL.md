@@ -1,5 +1,13 @@
 # TP-7 remote cue investigation
 
+> Historical protocol research. The production UI now uses opt-in **Track cues**
+> and **Tempo matching**; the unsupported FILE/settings probes, audio test, raw
+> reports and manual time-jump panel have been removed. Historical references to
+> these panels describe the investigation, not current controls. Their original
+> implementation is preserved in Git history (through commit `936b4ce`). The local
+> WAV metadata reader now lives in `wav-cues.js`. See the README for current use.
+
+
 The requested behavior is selection and playback of **existing, device-loaded
 cue markers**, without asking the user for a WAV. Automatic marker enumeration
 and cue-number selection are **not hardware-verified**. **TP-7 Device Access** now

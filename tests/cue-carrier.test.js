@@ -1,7 +1,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const carrier = require('../cue-carrier.js');
-const files = require('../file-access.js');
+const files = require('../wav-cues.js');
 const { encode, resample } = require('./helpers/carrier-audio.cjs');
 const source = { filename: 'prepared_128bpm.wav', sampleRate: 48000, numFrames: 16000000, kind: 'wav', bpm: 128,
     cues: [0, 480024, 1600000, 15999000] };

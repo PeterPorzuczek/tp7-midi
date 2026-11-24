@@ -1,6 +1,5 @@
-// TE SysEx envelope and Settings read protocol, verified against TE's web
-// updater. Companion session/transport opcodes have separate experimental
-// evidence. Position commands and events were checked against the companion
+// TE SysEx envelope, verified against TE's web updater. Companion
+// session/transport opcodes have separate experimental evidence. Position commands and events were checked against the companion
 // Android app. No native cue-list/selection opcode has been established.
 const TP7RemoteProtocol = (() => {
     const MAX_MESSAGE = 65536;
@@ -86,13 +85,6 @@ const TP7RemoteProtocol = (() => {
         return null;
     }
 
-    function positionFromSeconds(text) {
-        const match = /^(\d{1,7})(?:[.,](\d{1,3}))?$/.exec(String(text).trim());
-        if (!match) return null;
-        const ms = Number(match[1]) * 1000 + Number((match[2] || '').padEnd(3, '0'));
-        return Number.isSafeInteger(ms) && ms <= 0xFFFFFFFF ? ms : null;
-    }
-
     function seekData(positionMs) {
         if (!Number.isInteger(positionMs) || positionMs < 0 || positionMs > 0xFFFFFFFF) throw new Error('Invalid playback position.');
         // Tp7NewRecorderService.SetPosition: opcode byte 0x4C followed by a
@@ -148,29 +140,7 @@ const TP7RemoteProtocol = (() => {
         }
     }
 
-    function settingsChunk(data) {
-        // The manufacturer's reader skips two prefix bytes without decoding
-        // them. Their meaning is unconfirmed; do not assume a page number.
-        if (data.length < 2) throw new Error('Truncated settings page from TP-7.');
-        const end = data.indexOf(0, 2);
-        return data.slice(2, end === -1 ? data.length : end);
-    }
-
-    function flattenSettings(tree) {
-        const result = [];
-        const visit = (node, depth) => {
-            if (!node || depth > 16 || !Array.isArray(node.settings)) return;
-            for (const setting of node.settings) {
-                if (!setting || typeof setting !== 'object') continue;
-                if (setting.id !== undefined) result.push(setting);
-                else visit(setting, depth + 1);
-            }
-        };
-        visit(tree, 0);
-        return result;
-    }
-
-    return { encode, parse, parseEvent, companionEvent, positionFromSeconds, seekData, blePackets, BleReceiver, settingsChunk, flattenSettings };
+    return { encode, parse, parseEvent, companionEvent, seekData, blePackets, BleReceiver };
 })();
 
 if (typeof module !== 'undefined' && module.exports) module.exports = TP7RemoteProtocol;

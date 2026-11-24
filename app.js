@@ -98,11 +98,11 @@ function isMidiConnected() {
 // Send a batch immediately on USB, or in one ordered BLE write. The Promise
 // confirms delivery to the browser/transport, not a TP-7 state acknowledgement.
 function transmitMidiBatch(messages, isCurrent = () => true) {
-    if (window.tp7CompanionBusy) return Promise.reject(new Error('Wait for the companion transfer test to finish.'));
+    if (window.tp7CompanionBusy) return Promise.reject(new Error('Wait for the cue file transfer to finish.'));
     if (connectionType === 'ble' && bleMidiCharacteristic) {
         const characteristic = bleMidiCharacteristic;
         const write = bleWriteQueue.then(async () => {
-            if (window.tp7CompanionBusy) throw new Error('Companion transfer test is active.');
+            if (window.tp7CompanionBusy) throw new Error('Cue file transfer is active.');
             if (connectionType !== 'ble' || bleMidiCharacteristic !== characteristic || !isMidiConnected()) {
                 throw new Error('Bluetooth disconnected. Reconnect and apply again.');
             }
@@ -806,12 +806,38 @@ document.addEventListener('DOMContentLoaded', () => {
     createGainControls();
     createCueButtons();
 
+    let tempoTrack = null, tempoSourceKind = 'none';
+    const sourceInput = document.getElementById('tempo-source');
+    const sourceInfo = document.getElementById('tempo-source-info');
+    const currentTrack = remote => remote.enabled && remote.file ? `${remote.connection}:${TP7DJCues.trackKey(remote.file)}` : null;
+    document.addEventListener('tp7-remote-state', event => {
+        const next = currentTrack(event.detail);
+        if (next === tempoTrack) return;
+        tempoTrack = next; tempoFileRevision++; tempoSourceKind = 'none';
+        sourceInput.value = '';
+        sourceInfo.textContent = next ? `${event.detail.file.filename} · waiting for cue BPM, or enter manually.` : 'Enter BPM, or load it from the matching cue file.';
+        invalidateTempo();
+    });
+    window.tp7TempoSource = {
+        capture: () => tempoFileRevision,
+        fromCue(source, revision) {
+            const remote = window.tp7RemotePanel.getState();
+            if (revision !== tempoFileRevision || !tempoTrack || currentTrack(remote) !== tempoTrack ||
+                source.filename !== remote.file.filename || source.sampleRate !== remote.file.sampleRate || source.numFrames !== remote.file.numFrames ||
+                (tempoSourceKind === 'manual' && sourceInput.value.trim())) return;
+            tempoFileRevision++; tempoSourceKind = 'cue';
+            sourceInput.value = source.bpm === null ? '' : source.bpm.toLocaleString('en-US', { useGrouping: false, maximumSignificantDigits: 21 });
+            sourceInfo.textContent = source.bpm === null ? `${source.filename} · no BPM in cue file. Enter it manually.` : `${source.filename} · BPM from cue file`;
+            invalidateTempo();
+        },
+    };
     for (const id of ['tempo-source', 'tempo-target']) {
         document.getElementById(id).addEventListener('input', () => {
             if (id === 'tempo-source') {
                 // A slow file read must not overwrite a newer manual edit.
                 tempoFileRevision++;
-                document.getElementById('tempo-source-info').textContent = 'Manual entry · BPM is not available over MIDI.';
+                tempoSourceKind = 'manual';
+                sourceInfo.textContent = 'Manual BPM for the current track.';
             }
             invalidateTempo();
         });
@@ -825,6 +851,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const file = event.target.files[0];
         if (!file) return;
         const revision = ++tempoFileRevision;
+        tempoSourceKind = 'wav';
         const source = document.getElementById('tempo-source');
         const info = document.getElementById('tempo-source-info');
         // Never retain the previous track's BPM when reading another track.
@@ -1146,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('clear-state-btn').addEventListener('click', () => {
         if (confirm('Clear all saved state (layout, mixer, gain settings)?')) {
             localStorage.removeItem('tp7-control-state');
-            localStorage.removeItem('tp7-layout-order');
+            localStorage.removeItem('tp7-layout-order-v2');
             location.reload();
         }
     });
@@ -1265,11 +1292,11 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveLayoutOrder() {
         const sections = document.querySelectorAll('#app > .section');
         const order = Array.from(sections).map(s => s.id);
-        localStorage.setItem('tp7-layout-order', JSON.stringify(order));
+        localStorage.setItem('tp7-layout-order-v2', JSON.stringify(order));
     }
 
     function loadLayoutOrder() {
-        const saved = localStorage.getItem('tp7-layout-order');
+        const saved = localStorage.getItem('tp7-layout-order-v2');
         if (!saved) return;
 
         try {

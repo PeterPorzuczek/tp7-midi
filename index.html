@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>TP-7 MIDI</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎛️</text></svg>">
-    <link rel="stylesheet" href="styles.css?v=20261124-2">
+    <link rel="stylesheet" href="styles.css?v=20261124-3">
 </head>
 <body>
     <div class="container">
@@ -56,7 +56,7 @@
             <!-- Global State Warning -->
             <div id="dismiss-global-state" class="info-box dismissible">
                 <span class="icon">ℹ️</span>
-                <span>Standard MIDI control states are LOCAL only and may not match TP-7 after reconnection or physical interaction. The experimental Device Access panel separately shows actual device replies.</span>
+                <span>Standard MIDI control states are LOCAL only and may not match TP-7 after reconnection or physical interaction. Cue mode follows the track and playback position reported by TP-7.</span>
                 <button class="dismiss-btn" title="Dismiss">✕</button>
             </div>
 
@@ -96,125 +96,90 @@
                 </div>
             </div>
 
-            <!-- Cue Markers -->
-            <div id="section-device-cues" class="section">
-                <h2>TP-7 Device Access <small>Experimental</small></h2>
-                <p class="remote-help">Read the current file, its length and playback position directly from TP-7 over Bluetooth or USB. Start a remote session to use the DJ Jump Grid below. No local WAV file is needed.</p>
-                <div class="remote-actions">
-                    <button id="remote-inspect" class="primary" disabled>Read TP-7</button>
-                    <button id="remote-session" disabled>Start remote session</button>
-                </div>
-                <p id="remote-status" class="remote-status" role="status" aria-live="polite">Connect TP-7 first.</p>
-                <p id="remote-device" class="remote-help">Device information has not been read.</p>
-                <div class="remote-live">
-                    <p id="remote-file">Waiting for the current file…</p>
-                    <p id="remote-file-info"></p>
-                    <p><span id="remote-playback">Unknown</span> · <span id="remote-position">—</span></p>
-                    <small>Live device reports · experimental decoding · cue count unavailable</small>
-                </div>
-                <div class="remote-actions">
-                    <button id="remote-play" disabled>Resume playback</button>
-                    <button id="remote-stop" disabled>Native Stop</button>
-                </div>
-                <p class="remote-help">Resume continues from the current position. It does not perform the physical Play button's jump to a selected cue. Resume first disables recording arm and cue recording.</p>
-                <label for="remote-seek-time">Jump to time (seconds)</label>
-                <div class="remote-actions remote-seek-actions">
-                    <input id="remote-seek-time" type="text" inputmode="decimal" placeholder="10.000" autocomplete="off" aria-describedby="remote-seek-help">
-                    <button id="remote-seek" disabled>Jump &amp; play</button>
-                </div>
-                <p id="remote-seek-help" class="remote-help">Experimental: stops, sets the time, then resumes playback using the companion protocol. Enter seconds with up to 3 decimal places. Automatic reading of saved cue positions is not available yet.</p>
-                <details>
-                    <summary>Device replies and cue investigation</summary>
-                    <p class="remote-help">Start remote session receives file and playback events. To capture cue jumps, select a cue with +/− on TP-7, then press the physical Play button on TP-7. Repeat for another cue and copy the report. Resume in this app does not trigger that jump. Native cue positions and BPM are not present in these events. The DJ grid can use explicit BPM labels in a filename; it never treats a filename as a native cue count.</p>
-                    <pre id="remote-report" tabindex="0">No device replies yet.</pre>
-                    <button id="remote-copy">Copy report</button>
-                    <textarea id="remote-copy-text" readonly hidden aria-label="Device report for manual copying"></textarea>
-                </details>
+            <div id="section-tempo" class="section">
+                <h2>Tempo matching</h2>
+                <form id="tempo-form" class="tempo-panel" novalidate>
+                    <div class="tempo-inputs">
+                        <div>
+                            <label for="tempo-source">Track BPM <small>at original speed</small></label>
+                            <input id="tempo-source" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 120" aria-describedby="tempo-source-info" required>
+                        </div>
+                        <div>
+                            <label for="tempo-target">Target BPM</label>
+                            <input id="tempo-target" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 128" required>
+                        </div>
+                    </div>
+                    <button id="tempo-apply" class="primary" type="submit" disabled>Apply</button>
+                    <p id="tempo-result" class="tempo-result" role="status" aria-live="polite">Enter the track BPM and target BPM.</p>
+                    <div class="tempo-file-row">
+                        <button id="tempo-read-file" type="button">Read BPM from WAV</button>
+                        <input id="tempo-file" type="file" accept=".wav,audio/wav,audio/x-wav" hidden>
+                        <span id="tempo-source-info">Enter BPM, or load it from the matching cue file.</span>
+                    </div>
+                    <p class="tempo-help">Cue mode fills the original BPM from your matching .cue export. You can also enter BPM or read a local WAV.</p>
+                    <p class="tempo-help"><strong>Before Apply:</strong> start playback on TP-7 and set its on-device SPD to 1×, with external clock sync off. Apply resets the rocker and sends the closest MIDI speed immediately. The TP-7 screen's SPD stays unchanged.</p>
+                    <p class="tempo-help">The preview uses this project's experimental speed mapping. MIDI has finite precision; the displayed BPM is a prediction, not a measurement from TP-7.</p>
+                </form>
             </div>
 
             <div id="section-carrier" class="section">
-                <h2>Prepared Cue Carrier <small>Bluetooth cues</small></h2>
-                <p id="carrier-track" class="dj-track"></p>
-                <p id="carrier-target" class="dj-track remote-help"></p>
-                <label for="carrier-format">Companion file name</label>
-                <select id="carrier-format">
-                    <option value="cue">Same track name + .cue</option>
-                    <option value="txt">Same track name + .txt (extension test)</option>
-                    <option value="legacy-wav">Same track name + .tp7-cues.wav</option>
-                </select>
-                <p class="remote-help">Export any filename with its matching .cue in WAV Editor 1.3.1+ and copy both to the same TP-7 folder. The companion follows the selected track name. Re-export after renaming the WAV.</p>
-                <div class="carrier-options">
-                    <label><input id="carrier-auto" type="checkbox" checked> Auto-load when stopped</label>
-                    <label><input id="carrier-follow" type="checkbox" checked> Follow current cue page</label>
-                </div>
-                <p class="remote-help">Auto-load waits for TP-7 to confirm Stop, then reads once per track selection. If playback is unknown, press Native Stop. Reading restores the remote session and leaves playback stopped.</p>
-                <div class="remote-actions">
-                    <button id="carrier-read" class="primary" disabled>Read cue carrier</button>
-                    <button id="carrier-cancel" disabled>Cancel</button>
-                    <button id="carrier-copy">Copy cue report</button>
-                </div>
-                <p id="carrier-status" class="remote-status" role="status" aria-live="polite"></p>
-                <p id="carrier-source" class="remote-help"></p>
-                <p id="carrier-live" class="carrier-live" role="status" aria-live="polite">Load cues to follow playback.</p>
-                <div id="carrier-cues" class="dj-grid" role="group" aria-label="Validated prepared cue points"></div>
-                <div id="carrier-paging" class="dj-paging" hidden>
-                    <button id="carrier-prev">← Previous</button><span id="carrier-page"></span><button id="carrier-next">Next →</button>
-                </div>
-                <details>
-                    <summary>Prepare a cue companion once</summary>
-                    <p class="remote-help">Choose a local copy of your prepared WAV to extract its existing cue markers. Audio is skipped and nothing is uploaded. Save the generated helper and copy it to the same TP-7 folder as the original using your normal file-transfer method. Keep its exact filename and audio unchanged. Supports up to 256 markers.</p>
+                <h2>Track cues <small>Bluetooth</small></h2>
+                <label class="feature-toggle"><input id="cue-mode" type="checkbox"> Enable cue mode</label>
+                <p class="remote-help">Read the matching .cue export from TP-7 and follow its markers during playback.</p>
+                <div id="cue-mode-content" hidden>
                     <div class="remote-actions">
-                        <input id="carrier-file" type="file" accept=".wav,audio/wav" hidden>
-                        <button id="carrier-prepare">Prepare from WAV cues</button>
-                        <button id="carrier-test" disabled>Prepare 0 / 10 / 20 s test</button>
-                        <button id="carrier-download" disabled>Save companion file</button>
+                        <button id="remote-session" class="primary" disabled>Start listening</button>
+                        <button id="remote-play" disabled>Play</button>
+                        <button id="remote-stop" disabled>Stop</button>
                     </div>
-                    <p id="carrier-preparation" class="dj-track remote-help">The test option uses the current TP-7 track identity and needs no local original WAV. Its points are explicitly marked TEST.</p>
-                </details>
-                <p class="remote-help">Cue offsets are preserved as sample numbers, then rounded once to the nearest millisecond for TP-7's seek command. Bluetooth and Stop → Seek → Play add latency. Reading stops playback and restores the remote session afterwards. It does not switch TP-7's native CUE selection or read live changes to its WAV markers.</p>
+                    <p id="remote-status" class="remote-status" role="status" aria-live="polite">Connect TP-7 first.</p>
+                    <div class="remote-live">
+                        <p id="remote-file">Waiting for the current track…</p>
+                        <p id="remote-file-info"></p>
+                        <p><span id="remote-playback">Unknown</span> · <span id="remote-position">—</span></p>
+                    </div>
+                    <p class="remote-help">Auto-load checks the matching file when stopped. If it is waiting, press Stop. Play resumes from the current position; tapping a cue jumps and plays.</p>
+                    <div class="remote-actions">
+                        <button id="carrier-read" disabled>Reload cues</button>
+                        <button id="carrier-cancel" disabled>Cancel</button>
+                    </div>
+                    <p id="carrier-status" class="remote-status" role="status" aria-live="polite"></p>
+                    <p id="carrier-source" class="remote-help"></p>
+                    <p id="carrier-live" class="carrier-live" role="status" aria-live="polite">Load cues to follow playback.</p>
+                    <div id="carrier-cues" class="dj-grid" role="group" aria-label="Track cue points"></div>
+                    <div id="carrier-paging" class="dj-paging" hidden>
+                        <button id="carrier-prev">← Previous</button><span id="carrier-page"></span><button id="carrier-next">Next →</button>
+                    </div>
+                    <div class="carrier-options">
+                        <label><input id="carrier-follow" type="checkbox" checked> Follow current cue page</label>
+                        <label><input id="dj-enabled" type="checkbox"> Show generated beat / bar grid</label>
+                    </div>
+                    <details id="carrier-options">
+                        <summary>Cue file options</summary>
+                        <p class="remote-help">Export any filename with its matching .cue in WAV Editor 1.3.1+ and copy both to the same TP-7 folder. Re-export after renaming the WAV.</p>
+                        <p id="carrier-track" class="dj-track"></p>
+                        <p id="carrier-target" class="dj-track remote-help"></p>
+                        <label for="carrier-format">Companion file</label>
+                        <select id="carrier-format">
+                            <option value="cue">Same track name + .cue</option>
+                            <option value="legacy-wav">Same track name + .tp7-cues.wav</option>
+                        </select>
+                        <label class="feature-toggle"><input id="carrier-auto" type="checkbox" checked> Auto-load when stopped</label>
+                    </details>
+                    <details id="carrier-prepare-options">
+                        <summary>Prepare a cue file from WAV</summary>
+                        <p class="remote-help">Choose a local WAV to copy its markers and stored BPM into a matching .cue. Save it next to the original on TP-7. Your audio stays on this device.</p>
+                        <div class="remote-actions">
+                            <input id="carrier-file" type="file" accept=".wav,audio/wav" hidden>
+                            <button id="carrier-prepare">Choose WAV</button>
+                            <button id="carrier-download" disabled>Save cue file</button>
+                        </div>
+                        <p id="carrier-preparation" class="dj-track remote-help"></p>
+                    </details>
+                </div>
             </div>
 
-            <div id="section-companion" class="section">
-                <h2>Companion Bluetooth <small>Audio channel test</small></h2>
-                <p class="remote-help">Audio reception and transfer cleanup were confirmed on TP-7 1.1.11 / Bluefy. This diagnostic test reads a short sample of the current track; use Prepared Cue Carrier above for prepared points.</p>
-                <p class="remote-help">Disconnect other companion apps. After updating this page, reconnect Bluetooth, press Read TP-7 and Start remote session. The test stops playback, requests audio from the current track, then aborts after a small sample. Audio is not saved or included in the report.</p>
-                <div class="remote-actions">
-                    <button id="companion-probe" class="primary" disabled>Test companion audio</button>
-                    <button id="companion-cancel" disabled>Cancel test</button>
-                    <button id="companion-copy">Copy companion report</button>
-                </div>
-                <p id="companion-status" class="remote-status" role="status" aria-live="polite">Waiting for Bluetooth and the current track.</p>
-            </div>
-
-            <div id="section-file-access" class="section">
-                <h2>Bluetooth File Access <small>Experimental test</small></h2>
-                <p class="remote-help">The TP-7 hardware report from 23 November 2026 rejected this protocol with “command not found”. Retained for other firmware tests; retrying it will not enable file access. Use the separate Companion Bluetooth test above to investigate audio reception.</p>
-                <div class="remote-actions">
-                    <button id="file-probe" class="primary" disabled>Test file access</button>
-                    <button id="file-cancel" disabled>Cancel test</button>
-                </div>
-                <p id="file-status" class="remote-status" role="status" aria-live="polite"></p>
-                <label for="file-select">File exposed by TP-7</label>
-                <div class="remote-actions file-read-actions">
-                    <select id="file-select" disabled aria-label="File exposed by TP-7"></select>
-                    <button id="file-read" disabled>Read selected file</button>
-                </div>
-                <p class="remote-help">For the current WAV: read actual cue positions and stored BPM, skipping audio by byte offset. For a .cue/.json file: download up to 64 KiB. This test sends only file-list/read commands; no files or firmware are written.</p>
-                <div id="file-cues" class="dj-grid" role="group" aria-label="Cue markers read from the current WAV"></div>
-                <div id="file-cue-paging" class="dj-paging" hidden>
-                    <button id="file-cue-prev">← Previous</button>
-                    <span id="file-cue-page"></span>
-                    <button id="file-cue-next">Next →</button>
-                </div>
-                <button id="file-download" hidden>Save received file</button>
-                <details>
-                    <summary>Files reported by TP-7</summary>
-                    <pre id="file-list" tabindex="0"></pre>
-                </details>
-                <button id="file-copy">Copy file test report</button>
-            </div>
-
-            <div id="section-dj" class="section">
+            <div id="section-dj" class="section" hidden>
                 <h2>DJ Jump Grid <small>Beat / bar jumps</small></h2>
                 <p id="dj-track" class="dj-track">Waiting for the current track…</p>
                 <div class="dj-controls">
@@ -298,29 +263,7 @@
             <!-- Playback Speed (Pitch Bend) -->
             <div id="section-pitch" class="section">
                 <h2>Playback Speed <small>Pitch Bend</small></h2>
-                <form id="tempo-form" class="tempo-panel" novalidate>
-                    <h3>Match BPM</h3>
-                    <div class="tempo-inputs">
-                        <div>
-                            <label for="tempo-source">Track BPM <small>at original speed</small></label>
-                            <input id="tempo-source" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 120" aria-describedby="tempo-source-info" required>
-                        </div>
-                        <div>
-                            <label for="tempo-target">Target BPM</label>
-                            <input id="tempo-target" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 128" required>
-                        </div>
-                    </div>
-                    <button id="tempo-apply" class="primary" type="submit" disabled>Apply</button>
-                    <p id="tempo-result" class="tempo-result" role="status" aria-live="polite">Enter the track BPM and target BPM.</p>
-                    <div class="tempo-file-row">
-                        <button id="tempo-read-file" type="button">Read BPM from WAV</button>
-                        <input id="tempo-file" type="file" accept=".wav,audio/wav,audio/x-wav" hidden>
-                        <span id="tempo-source-info">Manual entry · BPM is not available over MIDI.</span>
-                    </div>
-                    <p class="tempo-help">Choose a local copy of the current TP-7 track to read its saved BPM, or enter it manually. Files stay on your computer.</p>
-                    <p class="tempo-help"><strong>Before Apply:</strong> start playback on TP-7 and set its on-device SPD to 1×, with external clock sync off. Apply resets the rocker and sends the closest MIDI speed immediately. The TP-7 screen's SPD stays unchanged.</p>
-                    <p class="tempo-help">The preview uses this project's experimental speed mapping. MIDI has finite precision; the displayed BPM is a prediction, not a measurement from TP-7.</p>
-                </form>
+
                 <div id="dismiss-pitch-info" class="info-box dismissible">
                     <span class="icon">ℹ️</span>
                     <span><strong>1 of 3 speed controls.</strong> Internal multiplier via MIDI. Only during playback. NOT visible on TP-7. (Other 2: SPD on screen - no MIDI access!, Rocker below)</span>
@@ -476,16 +419,14 @@
 
     <script src="tempo.js"></script>
     <script src="wav-tempo.js"></script>
-    <script src="remote-protocol.js?v=20261123-1"></script>
-    <script src="companion-ble.js?v=20261124-1"></script>
+    <script src="remote-protocol.js?v=20261124-3"></script>
+    <script src="companion-ble.js?v=20261124-3"></script>
     <script src="cue-carrier.js?v=20261124-2"></script>
     <script src="dj-cues.js?v=20261123-1"></script>
-    <script src="file-access.js?v=20261123-4"></script>
-    <script src="app.js?v=20261123-2"></script>
-    <script src="remote-panel.js?v=20261124-2"></script>
-    <script src="carrier-panel.js?v=20261124-2"></script>
-    <script src="companion-panel.js?v=20261123-2"></script>
-    <script src="dj-panel.js?v=20261123-1"></script>
-    <script src="file-panel.js?v=20261123-2"></script>
+    <script src="wav-cues.js?v=20261124-3"></script>
+    <script src="app.js?v=20261124-3"></script>
+    <script src="remote-panel.js?v=20261124-3"></script>
+    <script src="carrier-panel.js?v=20261124-3"></script>
+    <script src="dj-panel.js?v=20261124-3"></script>
 </body>
 </html>

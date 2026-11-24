@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el('dj-bpm').value = manualBpm && typeof saved?.bpm === 'string' ? saved.bpm.slice(0, 32) : inferred ?? '';
         el('dj-interval').value = saved && Object.hasOwn(cues.intervals, saved.interval) ? saved.interval : 'bar-4';
         el('dj-meter').value = String(Number.isInteger(saved?.beatsPerBar) && saved.beatsPerBar >= 1 && saved.beatsPerBar <= 12 ? saved.beatsPerBar : 4);
-        el('dj-track').textContent = file ? file.filename : 'Connect → Read TP-7 → Start remote session';
+        el('dj-track').textContent = file ? file.filename : 'Enable cue mode and start listening';
         el('dj-bpm-source').textContent = manualBpm ? 'Saved manual BPM for this track.' :
             inferred ? `From filename: ${inferred} BPM. You can override it.` : 'Enter BPM, or use tempo_88 / bpm_128 / 128bpm in the filename.';
         for (const id of ['dj-bpm', 'dj-interval', 'dj-meter']) el(id).disabled = !file;
@@ -52,7 +52,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el('dj-action-status').textContent = '';
         el('dj-action-status').dataset.status = '';
         if (!remote.file) el('dj-summary').textContent = 'Waiting for the current file and its length.';
-        else {
+        else if (el('dj-enabled').checked && remote.enabled) {
             try {
                 grid = cues.createGrid({ ...remote.file, bpm: el('dj-bpm').value,
                     interval: el('dj-interval').value, beatsPerBar: Number(el('dj-meter').value) });
@@ -73,7 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el('dj-page-total').textContent = `of ${pages}`;
         el('dj-prev').disabled = pageIndex === 0;
         el('dj-next').disabled = pageIndex >= pages - 1;
-        if (grid) {
+        if (grid && el('dj-enabled').checked && remote.enabled) {
             const fragment = document.createDocumentFragment();
             for (let index = pageIndex * pageSize; index < Math.min(grid.count, (pageIndex + 1) * pageSize); index++) {
                 const point = grid.pointAt(index);
@@ -98,11 +98,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function jump(point) {
-        if (!grid || remote.busy || !remote.ready) return;
+        if (!el('dj-enabled').checked || !remote.enabled || !grid || remote.busy || !remote.ready) return;
         const selectedRevision = revision;
         el('dj-action-status').dataset.status = '';
         el('dj-action-status').textContent = `Jumping to ${point.time}…`;
-        const success = await window.tp7RemotePanel.jumpTo(point.positionMs, () => selectedRevision === revision);
+        const success = await window.tp7RemotePanel.jumpTo(point.positionMs, () => selectedRevision === revision && el('dj-enabled').checked && remote.enabled);
         if (selectedRevision !== revision) return;
         el('dj-action-status').textContent = success ? `Jump ${point.index + 1} · ${point.time} · playback acknowledged.` :
             `Jump not completed. ${el('remote-status').textContent}`;
@@ -111,7 +111,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateLive() {
         el('dj-connection').textContent = !remote.connected ? 'Connect TP-7 to use the grid.' :
-            !remote.ready ? 'In Device Access, press Read TP-7, then Start remote session.' : remote.busy ? 'Waiting for TP-7…' :
+            !remote.ready ? 'Enable cue mode and start listening.' : remote.busy ? 'Waiting for TP-7…' :
                 remote.positionMs === null ? 'Ready · tap a jump to play.' : `Device position ${cues.formatTime(remote.positionMs)} · tap a jump to play.`;
         // Highlight from actual device telemetry, never from an optimistic seek.
         let active = -1;
@@ -134,6 +134,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function receiveState(next) {
         remote = next;
+        el('section-dj').hidden = !remote.enabled || !el('dj-enabled').checked;
         const nextKey = cues.trackKey(next.file);
         if (nextKey !== key) { key = nextKey; loadFile(); }
         else updateLive();
@@ -150,6 +151,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const requested = Number(el('dj-page').value);
         if (Number.isSafeInteger(requested)) pageIndex = requested - 1;
         renderPage();
+    });
+    el('dj-enabled').addEventListener('change', () => {
+        el('section-dj').hidden = !remote.enabled || !el('dj-enabled').checked;
+        regenerate();
     });
     document.addEventListener('tp7-remote-state', event => receiveState(event.detail));
     receiveState(window.tp7RemotePanel.getState());

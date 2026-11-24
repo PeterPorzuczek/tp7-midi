@@ -7,13 +7,13 @@ Technical setup for local development and testing.
 ## Tests
 
 The production app is still plain HTML/CSS/JS with no build step. Deploy the root
-files together, including `tempo.js`, `wav-tempo.js`, `remote-protocol.js` and
-`remote-panel.js`, to GitHub Pages.
+files together, including the tempo, local WAV cue reader, companion transfer, remote session
+and cue/grid panel scripts, to GitHub Pages.
 
 Run the arithmetic and WAV metadata tests with Node.js 20 or newer:
 
 ```sh
-node --test tests/tempo.test.js tests/wav-tempo.test.js tests/remote-protocol.test.js tests/dj-cues.test.js tests/file-access.test.js tests/companion-ble.test.js tests/cue-carrier.test.js
+node --test tests/tempo.test.js tests/wav-tempo.test.js tests/remote-protocol.test.js tests/dj-cues.test.js tests/wav-cues.test.js tests/companion-ble.test.js tests/cue-carrier.test.js
 ```
 
 They cover every representable pitch, exact half-step boundaries, an independent
@@ -34,7 +34,7 @@ mobile screenshots. These tests cover MIDI packets, retries, disconnection,
 cancellation of stale queued commands, reload/persistence, WAV loading and layout.
 They never access a real MIDI device and do not validate TP-7's speed curve.
 The remote-panel tests also simulate fragmented BLE SysEx, successful device
-acknowledgements, unsupported settings, notification failure and session timeout.
+acknowledgements, opt-in listening, notification failure and session timeout.
 They cover unsolicited companion notifications, position/file parsing, exact
 millisecond seek encoding, failed seeks, and cancellation when the track changes.
 They do not validate native cue navigation; see [REMOTE_PROTOCOL.md](../docs/REMOTE_PROTOCOL.md).
@@ -42,7 +42,10 @@ Prepared-cue tests also cover arbitrary Unicode filenames, automatic loading onl
 after confirmed Stop, one attempt per track selection, manual retry, cancellation
 on track change, preference persistence, and real-position highlighting across
 forward/backward jumps, stale notifications, EOF and page boundaries. These are
-simulated transport checks; hardware validation of the UI still uses Bluefy/TP-7.
+simulated transport checks. The user confirmed cue loading and live highlighting
+on Bluefy/TP-7 before the UI cleanup. Additional tests cover cue-mode cancellation,
+missing helpers, BPM auto-fill/manual precedence, and the optional grid remaining
+unbuilt while hidden.
 
 For a hardware check, use a known constant-BPM recording, native playback with
 on-device SPD=1× and external clock sync disabled. Measure recorded output against

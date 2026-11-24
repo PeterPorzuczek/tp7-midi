@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const saved = JSON.parse(localStorage.getItem(preferenceKey));
         if (typeof saved?.autoLoad === 'boolean') el('carrier-auto').checked = saved.autoLoad;
         if (typeof saved?.follow === 'boolean') el('carrier-follow').checked = saved.follow;
-        if (['cue', 'txt', 'legacy-wav'].includes(saved?.format)) el('carrier-format').value = saved.format;
+        if (['cue', 'legacy-wav'].includes(saved?.format)) el('carrier-format').value = saved.format;
     } catch { /* Optional storage, including private browsing. */ }
     function savePreferences() {
         try { localStorage.setItem(preferenceKey, JSON.stringify({ autoLoad: el('carrier-auto').checked,
@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (next !== identity) {
             clearAutoTimer(); controller?.abort(); attemptedKey = null; activeIndex = -1;
             identity = next; revision++; decoded = null; page = 0; renderCues();
-            status('Select the original track on TP-7, then read its prepared cue carrier.');
+            status('Select the original track on TP-7.');
         }
         let helper = '';
         try { if (remote.file) helper = codec.helperName(remote.file.filename, el('carrier-format').value); } catch { /* Invalid names cannot be read. */ }
@@ -32,7 +32,6 @@ document.addEventListener('DOMContentLoaded', () => {
         el('carrier-read').disabled = !!controller || remote.busy || !remote.ready || !helper || connectionType !== 'ble';
         el('carrier-cancel').disabled = !controller || controller.signal.aborted;
         el('carrier-format').disabled = preparing || !!controller || remote.busy;
-        el('carrier-test').disabled = preparing || !helper;
         el('carrier-prepare').disabled = preparing;
         el('carrier-download').disabled = !prepared || preparing;
         for (const button of el('carrier-cues').children) button.disabled = button.dataset.seekable === 'false' || !remote.ready || remote.busy || !!controller;
@@ -48,7 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (remote.playing !== false) {
             clearAutoTimer();
             status(remote.playing === true ? 'Auto-load queued for this track. Waiting for playback to stop.' :
-                'Auto-load ready. Press Native Stop or stop TP-7 to confirm that playback is stopped.');
+                'Auto-load ready. Press Stop to load this track’s cue file.');
             return;
         }
         if (autoTimer !== null) return;
@@ -94,7 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el('carrier-page').textContent = `${page + 1} / ${pages}`;
         el('carrier-prev').disabled = page === 0;
         el('carrier-next').disabled = page >= pages - 1;
-        el('carrier-source').textContent = decoded ? `${decoded.kind === 'test' ? 'TEST points — not original WAV cues' : 'Prepared WAV cue markers'} · ${cues.length} points${decoded.bpm ? ` · stored BPM ${decoded.bpm}` : ''} · CRC ${decoded.checksum}` : '';
+        el('carrier-source').textContent = decoded ? `${decoded.kind === 'test' ? 'TEST points — not original WAV cues' : 'Track cues'} · ${cues.length} points${decoded.bpm ? ` · stored BPM ${decoded.bpm}` : ''}` : '';
         for (let index = page * 32; index < Math.min(cues.length, (page + 1) * 32); index++) {
             const cue = cues[index], button = document.createElement('button');
             button.type = 'button'; button.className = 'dj-cue'; button.dataset.position = cue.positionMs; button.dataset.index = index;
@@ -121,31 +120,33 @@ document.addEventListener('DOMContentLoaded', () => {
         clearAutoTimer(); attemptedKey = selectionKey(); automaticRead = automatic;
         const helperFormat = el('carrier-format').value;
         controller = new AbortController(); decoded = null; page = 0; renderCues(); controls();
-        const selected = revision;
+        const selected = revision, tempoRevision = window.tp7TempoSource.capture();
         let result;
         const stages = { service: 'Opening companion Bluetooth…', identify: 'Identifying TP-7…', session: 'Stopping playback…',
             'enter-transfer': 'Opening the companion file…', audio: 'Receiving cue carrier…', decode: 'Checking signal, checksum and track identity…',
             cleanup: 'Closing transfer and restoring remote session…' };
-        const ok = await api.runCompanionTask(async (device, file, check, publish) => {
+        const ok = await api.runCompanionTask(async (device, file, check) => {
             result = await TP7CompanionBLE.readCarrier({ device, file, check, protocol: TP7RemoteProtocol, signal: controller.signal, helperFormat,
-                update(summary) { publish(summary); if (stages[summary.stage]) status(`${stages[summary.stage]} ${summary.audioBytes} bytes.`); } }, codec);
+                update(summary) { if (stages[summary.stage]) status(stages[summary.stage]); } }, codec);
             return result.cleanupErrors.length === 0;
-        }, { restart: true });
+        });
         controller = null; automaticRead = false;
         if (selected !== revision) { controls(); return; }
         if (result?.result === 'cues-decoded' && !result.cleanupErrors.length) {
             decoded = result.carrier; renderCues();
-            status(`${decoded.cues.length} ${decoded.kind === 'test' ? 'test points' : 'prepared WAV cues'} received and validated.${ok ? ' Tap a point to jump and play.' : ' Press Start remote session before jumping.'}`, !ok);
+            window.tp7TempoSource.fromCue(decoded, tempoRevision);
+            status(`${decoded.cues.length} ${decoded.kind === 'test' ? 'test points' : 'prepared WAV cues'} received and validated.${ok ? ' Tap a point to jump and play.' : ' Start listening before using cues.'}`, !ok);
         } else {
             const message = result?.cleanupErrors.length ? result.cleanupErrors.join(' ') : result?.error || el('remote-status').textContent;
             const cleanup = result?.cleanupErrors.length ? ' Transfer cleanup was not confirmed; disconnect and reconnect before playback.' : '';
-            status(`${message} No cue buttons accepted. Check that the companion file is in the same TP-7 folder with the exact name shown above.${cleanup}`, true);
+            if (automatic && result?.lastStage === 'enter-transfer' && !result.cleanupErrors.length) {
+                status(`Cue file unavailable: ${codec.helperName(remote.file.filename, helperFormat)}. Copy it next to the WAV, then Reload cues.`);
+            } else status(`${message}${cleanup}`, true);
         }
         controls();
     }
     el('carrier-read').addEventListener('click', () => loadCues());
     el('carrier-cancel').addEventListener('click', () => { controller?.abort(); controls(); });
-    el('carrier-copy').addEventListener('click', () => el('remote-copy').click());
     el('carrier-format').addEventListener('change', () => {
         clearAutoTimer(); controller?.abort(); attemptedKey = null; activeIndex = -1;
         revision++; decoded = null; prepared = null; savePreferences(); renderCues(); controls();
@@ -163,17 +164,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function prepare(source) {
         prepared = codec.makeWave(source, el('carrier-format').value);
-        el('carrier-preparation').textContent = `${prepared.filename} · ${prepared.cueCount} ${source.kind === 'test' ? 'TEST points (0 / 10 / 20 s when inside the track)' : 'original WAV markers'} · ${prepared.seconds.toFixed(2)} s with padded ending · ${Math.ceil(prepared.bytes.length / 1024)} KiB. Save and copy it next to ${source.filename} on TP-7. Renaming the WAV requires preparing a new companion. Select the original track when reading cues.`;
+        el('carrier-preparation').textContent = `${prepared.filename} · ${prepared.cueCount} markers${source.bpm ? ` · ${source.bpm} BPM` : ''}. Save next to ${source.filename} on TP-7. Re-export after renaming.`;
     }
-    el('carrier-test').addEventListener('click', () => {
-        prepared = null;
-        try {
-            const file = api.getState().file;
-            if (!file) throw new Error('Read the current track first.');
-            prepare({ ...file, kind: 'test', bpm: null, cues: [0, 10, 20].map(seconds => seconds * file.sampleRate).filter(sample => sample < file.numFrames) });
-        } catch (error) { el('carrier-preparation').textContent = error.message; }
-        controls();
-    });
     el('carrier-prepare').addEventListener('click', () => el('carrier-file').click());
     el('carrier-file').addEventListener('change', async event => {
         const file = event.target.files[0]; event.target.value = '';
@@ -188,7 +180,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (received > 262144 || offset < 0 || offset + length > file.size) throw new Error('WAV metadata exceeded the preparation read limit.');
                 return new Uint8Array(await file.slice(offset, offset + length).arrayBuffer());
             } };
-            const metadata = await TP7FileAccess.readWave(reader, file.size, null);
+            const metadata = await TP7WavCues.readWave(reader, file.size, null);
             if (selected === preparationRevision) prepare({ ...metadata, filename: file.name, kind: 'wav' });
         } catch (error) { if (selected === preparationRevision) el('carrier-preparation').textContent = error.message; }
         finally { if (selected === preparationRevision) { preparing = false; controls(); } }

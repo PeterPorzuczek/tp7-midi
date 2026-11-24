@@ -40,6 +40,11 @@
 .carrier-options { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0; }
 .carrier-options label { display: flex; align-items: center; gap: 8px; font-size: .8rem; }
 .carrier-options input { width: auto; accent-color: var(--accent); }
+[hidden] { display: none !important; }
+.feature-toggle { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.feature-toggle input { width: auto; accent-color: var(--accent); }
+#section-tempo .tempo-panel { border: 0; padding: 0; margin: 0; background: none; }
+#section-carrier details { margin-top: 16px; }
 #carrier-format { max-width: 100%; }
 .carrier-live { padding: 12px; margin-top: 12px; border: 1px solid var(--border); border-radius: 6px; font: .85rem var(--font-mono); overflow-wrap: anywhere; }
 .carrier-live[data-playing="true"] { border-color: var(--success); color: #a5e2a8; }
@@ -50,12 +55,6 @@
 #carrier-cues .dj-cue.is-next .cue-state { color: #90caf9; }
 .dj-paging { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 14px; }
 .dj-paging[hidden] { display: none; }
-.file-read-actions select {
-    flex: 1 1 180px; width: 100%; min-width: 0; min-height: 44px; padding: 8px;
-    background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-}
-#file-list { max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; margin: 12px 0; }
-#section-file-access details { margin: 16px 0; }
 .dj-paging label { display: flex; align-items: center; gap: 6px; font-size: .8rem; }
 #dj-page { width: 70px; }
 @media (max-width: 440px) {
@@ -989,22 +988,6 @@ input[type="range"]::-moz-range-thumb {
     overflow-wrap: anywhere;
 }
 
-.remote-live small {
-    color: #b0b0b0;
-}
-
-.remote-seek-actions input {
-    flex: 1 1 100px;
-    min-width: 0;
-    width: 100px;
-    font: inherit;
-    color: var(--text);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 10px;
-}
-
 .remote-status {
     font-size: 0.85rem;
     line-height: 1.5;
@@ -1014,31 +997,6 @@ input[type="range"]::-moz-range-thumb {
 
 .remote-status[data-status="error"] {
     color: var(--warning);
-}
-
-#section-device-cues summary {
-    cursor: pointer;
-    font-size: 0.8rem;
-    margin-bottom: 12px;
-}
-
-#remote-report, #remote-copy-text {
-    width: 100%;
-    padding: 12px;
-    margin-bottom: 12px;
-    max-height: 240px;
-    overflow: auto;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font: 0.7rem/1.5 var(--font-mono);
-    color: var(--text);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-}
-
-#remote-copy-text {
-    height: 180px;
 }
 
 .cue-controls {

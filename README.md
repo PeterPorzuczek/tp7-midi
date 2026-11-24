@@ -6,7 +6,7 @@ Works on phones, tablets, and computers - right in your browser.
 
 **Live App:** https://peterporzuczek.github.io/tp7-midi/
 
-Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with BPM matching and a generated DJ jump grid.
+Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with precise BPM matching and Bluetooth cue-file loading with live section highlighting.
 
 ---
 
@@ -21,9 +21,14 @@ Fork of [lucidyan/tp7-midi](https://github.com/lucidyan/tp7-midi), with BPM matc
 
 ## Match a track to a target BPM
 
-In **Playback Speed → Match BPM**, enter the track's BPM at its original speed
+In **Tempo matching**, enter the track's BPM at its original speed
 and the target BPM, then press **Apply**. Decimal points and decimal commas are
-accepted. You can also use **Read BPM from WAV** to read saved ACID tempo metadata
+accepted. Cue mode automatically fills the source BPM from a validated matching
+`.cue` export when that export contains BPM. A manual edit takes precedence,
+including edits made during a transfer. Changing track clears the source BPM; the
+target stays in place. Reading BPM never applies speed automatically.
+
+You can also use **Read BPM from WAV** to read saved ACID tempo metadata
 from a local copy of the track. If the file has no valid BPM, enter it manually.
 The file is read locally and is never uploaded or modified. This is metadata
 reading, not audio beat detection or automatic access to the TP-7's selected file.
@@ -58,164 +63,57 @@ References: [official MIDI reference](https://teenage.engineering/guides/tp-7#mi
 
 ---
 
-## DJ Jump Grid
+## Track cues
 
-On Bluefy, connect over Bluetooth, press **Read TP-7**, then **Start remote
-session**. The **DJ Jump Grid** reads the current filename and duration from TP-7.
-Enter the **original track BPM**, choose **Jump every** and **Beats per bar**, then
-tap a generated button to jump and play. Changing grid settings sends no commands.
-The default is every **4 bars**, with **4 beats per bar**. Available intervals run
-from a quarter beat to 32 bars; long grids have pages of 32 buttons.
+1. Export your final filename in [TP-7 WAV Editor 1.3.1+](https://github.com/PeterPorzuczek/tp7-wav-editor-win)
+   with **Export matching .cue companion** enabled. Copy both `My song.wav` and
+   `My song.cue` to the same TP-7 folder. Any valid filename works, including
+   spaces, Unicode and multiple dots. Re-export after renaming the WAV.
+2. Connect over Bluetooth in Bluefy and check **Enable cue mode**. This starts
+   listening to the current track. **Start listening** retries after a reconnect.
+   **Play** resumes at the current position; **Stop** stops playback.
+3. Select the original music track. **Auto-load when stopped** tries its matching
+   cue file once per selection, after TP-7 confirms Stop. If the status is waiting,
+   press **Stop**. No playing track is stopped automatically. If the helper is
+   missing, add it and press **Reload cues**. Failed reads do not loop.
+4. Tap a cue to jump and play. The current section is green (**PLAYING**, or
+   **CURRENT POSITION** while stopped); the next cue is blue (**NEXT**).
 
-Explicit filename labels such as `tempo_88`, `bpm_128`, or `127.125bpm` fill in BPM
-automatically. Conflicting labels require manual entry. Numbers such as `cues_15`
-are ignored. Manual BPM and interval settings are remembered separately for each
-track in this browser. This does not change the separate Match BPM inputs.
+Cue mode is off on page load. Turning it off cancels pending work and clears the
+current markers and their BPM. There are no settings/FILE probes, audio diagnostic
+panels, raw reports or manual seconds-based jump controls in the app.
 
-Prepare tracks with a constant tempo and the first beat at **0:00**. Beats mean
-quarter notes, so choose 4 per bar for 4/4. Use the original BPM even if playback
-speed is changed: the buttons address the original file timeline. This is a
-calculated grid, not audio/drum detection or an import of embedded native cues.
+The cue file contains the original filename, sample rate, frame count, marker
+sample offsets and optional BPM from the same export snapshot. It is an encoded
+audio companion, not a text CUE sheet. Signal, checksum and track identity must
+validate before any cue or BPM is accepted. The user has confirmed this workflow
+and live highlighting on TP-7 1.1.11 with Bluefy. It does not change TP-7's native
+CUE selection or synchronize edits subsequently made on the device.
 
-For a 7,832,495-frame, 48 kHz track at 88 BPM, four-bar spacing generates **15
-jumps**, from 0:00.000 through 2:32.727, within a **2:43.177** track. Each position
-is calculated independently with exact integer ratios and rounded once to the
-nearest millisecond (at most 0.5 ms arithmetic error; no accumulated rounding).
-That precision describes the requested file position, not audible device timing.
-Each tap uses the working Stop → Set position → Play sequence. Bluetooth and
-device latency cause a playback interruption; there is no live beat quantization
-or synchronization to another deck. Existing TP-7 cues are not written or erased.
+**Cue file options** contains auto-load and the legacy `.tp7-cues.wav` extension.
+**Prepare a cue file from WAV** can also generate a companion locally by reading
+existing WAV markers and saved ACID BPM, without uploading or reading the audio
+payload. The padded carrier tolerates the missing final partial transfer block
+observed on this firmware. Regenerate old truncated helpers with this app or the
+Windows editor. Zero through 256 markers are supported; file-end markers are
+shown disabled.
 
-## Prepared Cue Carrier
+Loading temporarily takes over the companion connection and leaves playback
+stopped after restoring listening. Jumps use Stop → Seek → Play, with Bluetooth
+and device latency. Sample offsets are rounded once to the nearest millisecond;
+there is no live-beat quantization. Highlights follow reported device positions,
+including physical jumps and backward seeks. During playback, missing positions
+for three seconds clear the highlight until data resumes. **Follow current cue
+page** follows section changes and can be disabled for browsing.
 
-The user confirmed receiving three cue points from a separate `.tp7-cues.wav`
-file over Bluetooth in Bluefy on TP-7 1.1.11. A later report accepted `.cue` and
-received audio but stopped after 11 complete 4000-sample blocks (2.75 seconds),
-truncating a 2.94-second helper. This exact failure is reproduced in the tests.
-New helpers include at least one second of trailing silence and align to 250 ms
-blocks so the cue data and CRC precede the potentially omitted tail. The user
-confirmed that the padded `.cue` helper works on the device. Hiding every helper
-extension from TP-7's track list is not confirmed.
-This does not read the native marker
-table or change the recorder's native CUE selection.
+## Optional generated grid
 
-Prepare once, when loading music onto TP-7:
-
-1. In [TP-7 WAV Editor for Windows](https://github.com/PeterPorzuczek/tp7-wav-editor-win),
-   use version **1.3.1 or newer**, and leave **Export matching .cue companion** checked.
-   Choose any final filename: exporting `My song.wav` also writes `My song.cue`
-   from the same snapshot, including multitrack exports. Spaces, Unicode characters
-   and multiple dots are preserved. Alternatively,
-   use **Prepare a cue companion once → Prepare from WAV cues** here and choose
-   **Save companion file**. This reads headers/markers locally, skipping audio.
-2. Copy both files to the same TP-7 folder using your normal music-transfer method.
-   Select **Same track name + .cue** in this panel. The expected helper name follows
-   the current TP-7 track automatically. If TP-7 rejects that extension, rename only
-   the companion to `My song.tp7-cues.wav` and select **Same track name + .tp7-cues.wav** here. That
-   fallback works on hardware but appears as another audio track. Keep the original
-   WAV filename and companion audio unchanged. The web app does not upload files.
-   An experimental **Same track name + .txt (extension test)** option prepares and reads the
-   same audio under `.txt`; it does not implement plain-text Bluetooth transfer.
-   Use the final WAV filename before preparation: renaming both exported files
-   does not update the filename embedded inside the companion.
-3. In Bluefy, select **the original music track** on TP-7, connect, **Read TP-7 →
-   Start remote session**. **Auto-load when stopped** is enabled by default: once
-   TP-7 confirms Stop, the app reads the matching helper once per track selection.
-   While playing, it waits; if playback is unknown, press **Native Stop**. You can
-   also use **Read cue carrier** to read immediately or retry a failed read.
-   The app requests the helper by name,
-   checks its signal, CRC and source identity, then shows cue buttons. Playback is
-   stopped during reading; the remote session is restored automatically after
-   acknowledged cleanup. Tapping a cue uses the existing Stop → Seek → Play path.
-
-The current cue section is green with **PLAYING** while TP-7 reports playback;
-the next marker is blue with **NEXT**. When stopped, the current marker says
-**CURRENT POSITION**. Highlighting follows actual device position notifications,
-including physical jumps and backward seeks, rather than estimating time from
-BPM or treating a button click as a successful jump. Without fresh positions for
-three seconds during playback, the highlight clears until another report arrives.
-No marker is active at the file end. **Follow current cue page** changes the page
-when playback enters a section on another page; it can be disabled for browsing.
-These preferences and the helper extension are saved locally. Track changes and
-disconnects clear old cues, and failed automatic reads require a manual retry.
-
-For a first hardware test without the original WAV on hand, **Prepare 0 / 10 / 20 s
-test** creates a helper for the currently observed track. These are explicitly
-labelled TEST points, not recovered native markers. Save/copy/read it as above.
-
-Sample offsets are preserved as uint32 values and rounded once with integer
-arithmetic to the nearest millisecond for the device's seek command. No rhythm
-analysis or repeated interval rounding is used. Track matching checks filename,
-sample rate and frame count; regenerate a helper after changing the original
-audio or markers. It is not an audio-content fingerprint. The carrier is a
-separate PCM WAV containing FSK data that can survive the companion's ADPCM
-conversion. It is not an ordinary text `.cue` sidecar, and the original WAV's
-metadata is not being fetched over Bluetooth.
-
-Transfer is bounded to 512 KiB compressed data and 40 seconds. Invalid, truncated,
-corrupted or mismatched data produces no cue buttons. Audio stays in browser
-memory for decoding and is omitted from reports. The report includes the checked
-marker list, decoder counts and cleanup outcome. Cue buttons are cleared when
-the track/connection changes. Bluetooth and device latency still apply to jumps.
-Zero through 256 markers are supported. Empty exports clear the web marker list;
-markers at the file end (including those rounding to it) are preserved and shown
-disabled, since the remote seek must precede EOF. Re-export and copy **both** files
-after editing cues. Changes made directly on TP-7 are not synchronized back.
-
-## Companion Bluetooth audio diagnostic
-
-The 23 November 2026 hardware report rejected generic FILE command 5 twice
-with status 2 (command not found). Retrying that test does not enable cue access.
-
-**Companion Bluetooth → Test companion audio** uses the separate GATT service
-identified in the official companion application's binary. Reconnect Bluetooth
-after loading this version, then use **Read TP-7 → Start remote session** first.
-Close other companion apps. The test stops playback, opens track 0 of the current
-file, requests audio and aborts after a small sample (4 KiB target; 8-second receive
-timeout). It then exits transfer mode and closes its session. Press **Start remote
-session** again to use the normal playback controls. If cleanup is not acknowledged,
-disconnect and reconnect before continuing. Cancel also attempts this cleanup.
-
-The report contains stages, request results and byte counts, not the audio.
-**Audio reception is not native cue extraction.** The companion transcodes audio
-to ADPCM / 16 kHz mono and reconstructs a WAV, losing original RIFF metadata. A
-prepared WAV carrier now supplies an alternative described above. The short
-diagnostic remains available separately; it does not read markers.
-
-## Earlier generic FILE experiment
-
-**Bluetooth File Access** tests TE's generic FILE interface over the existing
-Bluetooth/MIDI connection. Its command format comes from TE's official Sample
-Tool, but **the user's TP-7 rejected this interface on the tested MIDI connection**.
-
-In Bluefy: **Read TP-7 → Start remote session**, stop playback, disconnect other
-companion apps, then press **Test file access**. If the device returns a listing,
-choose **Read selected file**. The reader can extract actual cue/BPM metadata from
-the current WAV by skipping its audio bytes, or download a listed `.cue`/`.json`
-file up to 64 KiB. Verified WAV markers become jump buttons. The app does not
-create or write any device files. Rejected/unknown responses stop the test and
-remain in **Copy file test report**. An unsupported response disables retries for
-that connection. This panel is retained for investigating other firmware.
-
-See [source evidence and test boundaries](docs/REMOTE_PROTOCOL.md#2026-11-23-alternative-file-interface).
-
-## Device cue investigation
-
-The **TP-7 Device Access** panel reads device replies over Bluetooth or USB,
-shows the current file, length, position and playback state, and provides companion
-Resume/Stop and experimental **Jump & play** controls. Jump & play uses a
-millisecond time position. The companion events do not expose native cue positions
-or counts. The separate FILE experiment attempts to read them from the WAV.
-Resume does not perform the physical Play button's cue jump.
-The existing Cue Markers grid still addresses MIDI notes.
-
-The user confirmed manual time jumps work on TP-7 / Bluefy on 2026-11-17.
-For native cue investigation,
-select cues with +/− on TP-7 and press **physical Play on TP-7**. **Copy report** exports
-the received data for analysis without needing a WAV file. See
-[the research and protocol limits](docs/REMOTE_PROTOCOL.md).
-The settings-reader unsupported notice on firmware 1.1.11 does not prevent
-opening a companion session.
+In cue mode, check **Show generated beat / bar grid** to reveal **DJ Jump Grid**.
+The grid is neither shown nor calculated while unchecked. Enter the original BPM,
+choose a beat/bar interval and beats per bar, then tap a generated jump.
+It can infer explicit labels such as `tempo_88`, `bpm_128` or `128bpm` from the
+filename; manual per-track settings are saved locally. The grid assumes a constant
+tempo and first beat at zero. It does not analyze drums or replace loaded markers.
 
 ---
 
@@ -377,7 +275,7 @@ These are TP-7 firmware limitations discovered through MIDI experimentation:
 
 | Issue | Description |
 |-------|-------------|
-| **No standard state queries** | The standard MIDI controls have no documented state queries. Their UI may become out of sync after reconnection or physical interaction. Experimental vendor SysEx replies are investigated separately in the Device Access panel. |
+| **No standard state queries** | The standard MIDI controls have no documented state queries. Their UI may become out of sync after reconnection or physical interaction. Cue mode separately follows track and playback notifications from TP-7. |
 | **Controller Mode is separate** | TP-7 only sends button events (CC 20-27) in Controller Mode, which is mutually exclusive with receiving MIDI commands. You cannot control AND receive events simultaneously. |
 | **No stop during playback** | In playback mode (after Play or Cue trigger), CC18 value 64 no longer stops. Stop point shifts between 60-61. To stop: set CC18=60 AND Pitch Bend=+708. |
 | **SPD/Pitch Bend disconnect** | The Pitch Bend speed multiplier and SPD on screen SHOULD be the same control, but they're completely separate. Pitch Bend changes are NOT visible on TP-7 display. Likely a firmware bug. |

@@ -67,16 +67,6 @@ test('realtime and ordinary MIDI do not become cue events; reset drops partial m
     assert.equal(received.length, 1);
 });
 
-test('reads bounded settings pages and retains actual device descriptors', () => {
-    assert.deepEqual(remote.settingsChunk([0, 2, 123, 125, 0]), [123, 125]);
-    assert.deepEqual(remote.settingsChunk([2, 255, 123, 125, 0]), [123, 125], 'prefix is not assumed to be a page number');
-    assert.deepEqual(remote.settingsChunk([0, 3, 0]), []);
-    assert.throws(() => remote.settingsChunk([0]));
-    const setting = { id: 7, name: 'MIDI mode', value: 'cue' };
-    assert.deepEqual(remote.flattenSettings({ settings: [{ name: 'System', settings: [setting] }] }), [setting]);
-    assert.deepEqual(remote.flattenSettings(null), []);
-});
-
 test('decodes captured unsolicited position and playback events without treating them as replies', () => {
     const position = [240, 0, 32, 118, 25, 64, 64, 0, 127, 6, 77, 99, 6, 0, 0, 247];
     assert.equal(remote.parse(position), null);
@@ -111,10 +101,5 @@ test('companion seek uses an exact unsigned little-endian millisecond offset', (
     assert.deepEqual(remote.seekData(10000), [76, 16, 39, 0, 0]);
     assert.deepEqual(remote.seekData(0x12345678), [76, 120, 86, 52, 18]);
     assert.deepEqual(remote.seekData(0xFFFFFFFF), [76, 255, 255, 255, 255]);
-    assert.equal(remote.positionFromSeconds('0'), 0);
-    assert.equal(remote.positionFromSeconds('10.001'), 10001);
-    assert.equal(remote.positionFromSeconds('10,01'), 10010);
-    assert.equal(remote.positionFromSeconds('4294967.295'), 0xFFFFFFFF);
-    for (const text of ['', '-1', '1.0001', '1e2', 'NaN', '4294967.296']) assert.equal(remote.positionFromSeconds(text), null);
     for (const value of [-1, 1.5, NaN, 0x100000000]) assert.throws(() => remote.seekData(value));
 });
