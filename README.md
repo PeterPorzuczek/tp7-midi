@@ -109,6 +109,10 @@ page** follows section changes and can be disabled for browsing.
 
 ## Optional generated grid
 
+**Track Mixer** sits directly below Track cues. It starts collapsed; check
+**Show track mixer** to reveal its faders, mutes and actions. Collapsing it keeps
+the current mixer settings and sends no MIDI commands.
+
 In cue mode, check **Show generated beat / bar grid** to reveal **DJ Jump Grid**.
 The grid is neither shown nor calculated while unchecked. Enter the original BPM,
 choose a beat/bar interval and beats per bar, then tap a generated jump.

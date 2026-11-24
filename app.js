@@ -806,6 +806,13 @@ document.addEventListener('DOMContentLoaded', () => {
     createGainControls();
     createCueButtons();
 
+    const mixerToggle = document.getElementById('mixer-enabled');
+    mixerToggle.checked = false;
+    document.getElementById('mixer-content').hidden = true;
+    mixerToggle.addEventListener('change', () => {
+        document.getElementById('mixer-content').hidden = !mixerToggle.checked;
+    });
+
     let tempoTrack = null, tempoSourceKind = 'none', cueReadPending = false;
     const sourceInput = document.getElementById('tempo-source');
     const sourceInfo = document.getElementById('tempo-source-info');
@@ -1171,6 +1178,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (confirm('Clear all saved state (layout, mixer, gain settings)?')) {
             localStorage.removeItem('tp7-control-state');
             localStorage.removeItem('tp7-layout-order-v2');
+            localStorage.removeItem('tp7-layout-order-v3');
             location.reload();
         }
     });
@@ -1289,15 +1297,17 @@ document.addEventListener('DOMContentLoaded', () => {
     function saveLayoutOrder() {
         const sections = document.querySelectorAll('#app > .section');
         const order = Array.from(sections).map(s => s.id);
-        localStorage.setItem('tp7-layout-order-v2', JSON.stringify(order));
+        localStorage.setItem('tp7-layout-order-v3', JSON.stringify(order));
     }
 
     function loadLayoutOrder() {
-        const saved = localStorage.getItem('tp7-layout-order-v2');
-        if (!saved) return;
+        const saved = localStorage.getItem('tp7-layout-order-v3');
+        const previous = saved ? null : localStorage.getItem('tp7-layout-order-v2');
+        if (!saved && !previous) return;
 
         try {
-            const order = JSON.parse(saved);
+            const order = JSON.parse(saved || previous);
+            if (!Array.isArray(order)) return;
             const app = document.getElementById('app');
 
             order.forEach(id => {
@@ -1306,6 +1316,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     app.appendChild(section);
                 }
             });
+            if (!saved) {
+                // Move only the mixer when upgrading an existing custom layout.
+                document.getElementById('section-carrier').after(document.getElementById('section-mixer'));
+                saveLayoutOrder();
+            }
         } catch (e) {
             console.error('Failed to load layout order:', e);
         }
